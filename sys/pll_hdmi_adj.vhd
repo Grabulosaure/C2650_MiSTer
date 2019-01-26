@@ -13,13 +13,6 @@
 --  6    : Interlaced video field 
 --  5    : Sign period difference.
 --  4:0  : Period difference. Log (0=Large 31=Small)
-
-
---2435
-
---  0 0 1 00100
---  0 0 1 10101
-  
   
 LIBRARY ieee;
 USE ieee.std_logic_1164.ALL;
@@ -32,8 +25,6 @@ ENTITY pll_hdmi_adj IS
     lltune        : IN  unsigned(15 DOWNTO 0); -- Outputs from scaler
     
     locked        : OUT std_logic;
-    sshm : OUT std_logic;
-    inv : IN std_logic;
     
     -- Signals from reconfig commands
     i_waitrequest : OUT std_logic;
@@ -70,8 +61,8 @@ ARCHITECTURE rtl OF pll_hdmi_adj IS
   SIGNAL mul : unsigned(15 DOWNTO 0);
   SIGNAL sign,sign_pre : std_logic;
   SIGNAL up,modo,phm,dir : std_logic;
-  SIGNAL alt : std_logic;
-  SIGNAL xxx_off,xxx_ofp : natural;
+  SIGNAL cpt : natural RANGE 0 TO 3;
+  SIGNAL col : natural RANGE 0 TO 15;
 BEGIN
   ----------------------------------------------------------------------------
   -- 000010 : Start reg "Write either 0 or 1 to start fractional PLL reconf.
@@ -135,10 +126,7 @@ BEGIN
       IF off_v<4 THEN off_v:=4; END IF;
       
       ofp_v:=to_integer('0' & lltune_sync(12 DOWNTO 8));
-      IF ofp_v<4 THEN ofp_v:=4; END IF;
-      xxx_off<=off_v;
-      xxx_ofp<=ofp_v;
-      
+      IF ofp_v<3 THEN ofp_v:=3; END IF;
       IF off_v>=16 AND ofp_v>=16 THEN
         locked<=llena;
       ELSE
@@ -146,12 +134,13 @@ BEGIN
       END IF;
       
       up_v:='0';
-      IF lltune_sync3(15)/=lltune_sync2(15) AND
-        (lltune_sync2(7)='0' OR lltune_sync2(6)='1') THEN
-        alt<=NOT alt;
+      IF lltune_sync3(15)/=lltune_sync2(15) THEN
+        cpt<=cpt+1;
+        IF cpt=2 THEN cpt<=0; END IF;
         IF llena='0' THEN 
           -- Recover original freq when disabling low lag mode
-          alt<='0';
+          cpt<=0;
+          col<=0;
           IF modo='1' THEN
             mfrac<=mfrac_mem;
             mfrac_ref<=mfrac_mem;
@@ -159,29 +148,40 @@ BEGIN
             modo<='0';
           END IF;
           
-        ELSIF phm='0' AND alt='1' THEN
+        ELSIF phm='0' AND cpt=0 THEN
           -- Frequency adjust
           sign_v:=lltune_sync(5);
-          IF off_v>=16 THEN
+          IF col<8 THEN col<=col+1; END IF;
+          IF off_v>=16 AND col>=8 THEN
             phm<='1';
+            col<=0;
           ELSE
             off_v:=off_v+1;
+            IF off_v>17 THEN
+              off_v:=off_v + 3;
+            END IF;
             up_v:='1';
             up<='1';
           END IF;
           
-        ELSIF alt='1' THEN
+        ELSIF cpt=0 THEN
           -- Phase adjust
           sign_v:=NOT lltune_sync(13);
-          IF off_v<12 THEN
+          col<=col+1;
+          IF col>=8 THEN
             phm<='0';
+            up_v:='1';
+            off_v:=31;
+            col<=0;
           ELSE
             off_v:=ofp_v+2;
+            IF ofp_v>17 THEN
+              off_v:=off_v + 3;
+            END IF;
             up_v:='1';
-            up<='1';
           END IF;
+          up<='1';
         END IF;
-        
       END IF;
       
       diff_v:=shift_right(mfrac_ref,off_v);
@@ -255,8 +255,6 @@ BEGIN
 
     END IF;
   END PROCESS Schmurtz;
-
-  sshm<=phm;
   
   ----------------------------------------------------------------------------
   

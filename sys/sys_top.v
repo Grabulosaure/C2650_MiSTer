@@ -635,7 +635,6 @@ pll_hdmi_adj pll_hdmi_adj
 	.llena(lowlat),
 	.lltune(lltune),
 	.locked(locked),
-	.sshm(shm),
 	.i_waitrequest(adj_waitrequest),
 	.i_write(adj_write),
 	.i_address(adj_address),
@@ -1015,12 +1014,12 @@ emu emu
 	.SDRAM_CLK(SDRAM_CLK),
 	.SDRAM_CKE(SDRAM_CKE),
 
-	.UART_CTS(uart_rts),
+/*	.UART_CTS(uart_rts),
 	.UART_RTS(uart_cts),
 	.UART_RXD(uart_txd),
 	.UART_TXD(uart_rxd),
 	.UART_DTR(uart_dsr),
-	.UART_DSR(uart_dtr)
+	.UART_DSR(uart_dtr)*/
 );
 
 endmodule
