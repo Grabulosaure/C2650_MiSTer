@@ -82,7 +82,7 @@ ENTITY sgs2637 IS
     ack  : OUT std_logic;
     wr   : IN  std_logic;
     
-    vid_rgb  : OUT uv3;         -- R | G | B. 1bit/color
+    vid_argb : OUT uv4;         -- I | R | G | B
     vid_de   : OUT std_logic;
     vid_hsyn : OUT std_logic;
     vid_vsyn : OUT std_logic;
@@ -601,7 +601,7 @@ BEGIN
           o3c_coll<=o3_hit AND bg_hit;
           o4c_coll<=o4_hit AND bg_hit;
 
-          vid_rgb<=NOT (col_grb(1) & col_grb(2) & col_grb(0));
+          vid_argb<='1' & NOT (col_grb(1) & col_grb(2) & col_grb(0));
 
         WHEN 1 =>
           -- Wait !
