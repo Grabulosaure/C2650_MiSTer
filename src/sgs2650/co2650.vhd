@@ -255,7 +255,7 @@ ARCHITECTURE struct OF emu IS
   SIGNAL tick_cpu_cpt : natural RANGE 0 TO CDIV-1;
   SIGNAL tick_cpu : std_logic;
   
-  SIGNAL ad,ad_delay : unsigned(14 DOWNTO 0);
+  SIGNAL ad,ad_delay,ad_rom : unsigned(14 DOWNTO 0);
   SIGNAL dr,dw,dr_pvi,dr_uvi,dr_rom,dr_in_key,dr_ac_key : unsigned(7 DOWNTO 0);
   SIGNAL req,req_pvi,ack,ack_pvi,req_uvi,ack_uvi : std_logic;
   SIGNAL int, int_pvi,intack,creset : std_logic;
@@ -285,7 +285,7 @@ ARCHITECTURE struct OF emu IS
   SIGNAL vid_vsyn,in_vid_vsyn,ac_vid_vsyn : std_logic;
   SIGNAL vid_ce  ,in_vid_ce  ,ac_vid_ce   : std_logic;
 
-  SIGNAL vrst : std_logic;
+  SIGNAL in_vrst,ac_vrst : std_logic;
   -- OVO -----------------------------------------
   FUNCTION CC(i : character) RETURN unsigned IS
   BEGIN
@@ -439,7 +439,7 @@ BEGIN
       int       => int_pvi,
       intack    => intack,
       ivec      => ivec,
-      vrst      => vrst,
+      vrst      => in_vrst,
       vid_argb  => in_vid_argb,
       vid_de    => in_vid_de,
       vid_hsyn  => in_vid_hsyn,
@@ -536,6 +536,7 @@ BEGIN
       vid_hsyn  => ac_vid_hsyn,
       vid_vsyn  => ac_vid_vsyn,
       vid_ce    => ac_vid_ce,
+      vrst      => ac_vrst,
       sound     => ac_sound,
       pot1      => potr_v,
       pot2      => potl_v,
@@ -579,7 +580,7 @@ BEGIN
              x"00";
   
   ----------------------------------------------------------
-  sense <=vrst;
+  sense <=in_vrst WHEN arca='0' ELSE ac_vrst;
   
   potl_a<=mux(swap,unsigned(joystick_analog_1(15 DOWNTO 8)),
                    unsigned(joystick_analog_0(15 DOWNTO 8)))+x"80";
@@ -691,7 +692,11 @@ BEGIN
             (ad(12)='1' AND ad(11 DOWNTO 8)="1000") OR
             (ad(12)='1' AND ad(11 DOWNTO 8)="1010") OR
             (ad(12)='1' AND ad(11 DOWNTO 7)="10011") ELSE '0';
-  
+
+  ad_rom <="000" & ad(11 DOWNTO 0) WHEN arca='1' AND ad(14 DOWNTO 12)="000" ELSE
+           "001" & ad(11 DOWNTO 0) WHEN arca='1' AND ad(14 DOWNTO 12)="010" ELSE
+
+            ad;
   -- CPU
   i_sgs2650: ENTITY work.sgs2650
     PORT MAP (
@@ -845,11 +850,11 @@ BEGIN
   icart:PROCESS(clksys) IS
   BEGIN
     IF rising_edge(clksys) THEN
-      dr_rom<=cart(to_integer(ad(13 DOWNTO 0))); -- 8kB
+      dr_rom<=cart(to_integer(ad_rom(13 DOWNTO 0))); -- 8kB
       
       IF wcart='1' THEN
         -- RAM
-        cart(to_integer(ad(13 DOWNTO 0))):=dw;
+        cart(to_integer(ad_rom(13 DOWNTO 0))):=dw;
       END IF;
     END IF;
   END PROCESS icart;

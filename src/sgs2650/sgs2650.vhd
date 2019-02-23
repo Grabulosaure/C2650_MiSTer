@@ -9,11 +9,6 @@
 -- - For reads, data shall be available one cycle after req=ack=1
 -- - Same instruction timings as orignal
 
--- <AFAIRE> Valider
--- <AFAIRE> Finir interruptions
--- <AFAIRE> Trace
--- <AFAIRE> Mode "2650B"
-
 -- <AVOIR> Indirect indexé ++ / --
 
 --INHERENT

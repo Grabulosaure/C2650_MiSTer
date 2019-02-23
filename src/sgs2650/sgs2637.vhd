@@ -87,6 +87,7 @@ ENTITY sgs2637 IS
     vid_hsyn : OUT std_logic;
     vid_vsyn : OUT std_logic;
     vid_ce   : OUT std_logic;
+    vrst     : OUT std_logic;
 
     sound    : OUT uv8;
 
@@ -419,9 +420,9 @@ BEGIN
     
     -- Character ROM
     IF r_csize='1' THEN
-      rom_ad <= (ram_dr(5 DOWNTO 0) & "000" ) + ((vpos - voffset) MOD 8);
+      rom_ad <= (ram_dr(5 DOWNTO 0) & "000") + ((vpos - voffset) MOD 8);
     ELSE
-      rom_ad <= (ram_dr(5 DOWNTO 0) & "000" ) + ((vpos - voffset)/2 MOD 8);
+      rom_ad <= (ram_dr(5 DOWNTO 0) & "000") + ((vpos - voffset)/2 MOD 8);
     END IF;
     
     IF (vpos) < 13*8  + to_integer(voffset) THEN
@@ -733,11 +734,14 @@ BEGIN
       vid_de  <=to_std_logic(hpos<hdisp AND vpos<vdisp);
       
       vid_ce<=to_std_logic(cyc=0);
+      
     --------------------------------------------
     END IF;
 
 
   END PROCESS Vid;
+
+  vrst<=vrle;
   
   ------------------------------------------------------------------------------
   Sono:PROCESS(clk) IS
