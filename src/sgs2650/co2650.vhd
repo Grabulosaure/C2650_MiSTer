@@ -11,6 +11,8 @@ USE IEEE.std_logic_1164.all;
 USE IEEE.numeric_std.all;
 USE IEEE.std_logic_unsigned.ALL;
 
+USE std.textio.ALL;
+
 LIBRARY work;
 USE work.base_pack.ALL;
 
@@ -118,8 +120,10 @@ ARCHITECTURE struct OF emu IS
     "O0,Video standard,PAL,NTSC;" &
     "O1,Mode,Interton,Arcadia;" &
     "O3,Swap Joystick,Off,On;" &
+    "O4,Swap Joystick XY,Off,On;" &
     "O2,Overlay,Off,On;" &
     "R0,Reset & Detach cartridge;" &
+    "J,Start,Select,B1,B2,B3,B4,B5,B6,B7,B8,B9;" &
     "V1.0";
 
   FUNCTION to_slv(s: string) return std_logic_vector is 
@@ -215,7 +219,7 @@ ARCHITECTURE struct OF emu IS
   SIGNAL ioctl_dout       : std_logic_vector(7 DOWNTO 0);
   SIGNAL ioctl_wait       : std_logic :='0';
   
-  SIGNAL ntsc_pal,arca,swap : std_logic;
+  SIGNAL ntsc_pal,arca,swap,swapxy : std_logic;
   
   SIGNAL ps2_key,ps2_key_delay : std_logic_vector(10 DOWNTO 0);
   
@@ -243,6 +247,7 @@ ARCHITECTURE struct OF emu IS
   SIGNAL icol,explo,noise : std_logic;
   SIGNAL sound,in_sound,ac_sound : unsigned(7 DOWNTO 0);
   SIGNAL pot1,pot2 : unsigned(7 DOWNTO 0);
+  SIGNAL potl_a,potl_b,potr_a,potr_b : unsigned(7 DOWNTO 0);
   SIGNAL potl_v,potl_h,potr_v,potr_h : unsigned(7 DOWNTO 0);
   
   SIGNAL clksys,clksys_ntsc,clksys_pal,pll_locked : std_logic;
@@ -268,18 +273,19 @@ ARCHITECTURE struct OF emu IS
   --ATTRIBUTE ramstyle : string;
   --ATTRIBUTE ramstyle OF cart : SIGNAL IS "no_rw_check";
   
-  SHARED VARIABLE cart : arr_cart(0 TO 8191) :=(OTHERS =>x"00");
+  SHARED VARIABLE cart : arr_cart(0 TO 16383) :=(OTHERS =>x"00");
   ATTRIBUTE ramstyle : string;
   ATTRIBUTE ramstyle OF cart : VARIABLE IS "no_rw_check";
   
   SIGNAL wcart : std_logic;
   
-  SIGNAL vid_rgb ,in_vid_rgb ,ac_vid_rgb  : unsigned(2 DOWNTO 0);
+  SIGNAL vid_argb ,in_vid_argb ,ac_vid_argb : unsigned(3 DOWNTO 0);
   SIGNAL vid_de  ,in_vid_de  ,ac_vid_de   : std_logic;
   SIGNAL vid_hsyn,in_vid_hsyn,ac_vid_hsyn : std_logic;
   SIGNAL vid_vsyn,in_vid_vsyn,ac_vid_vsyn : std_logic;
   SIGNAL vid_ce  ,in_vid_ce  ,ac_vid_ce   : std_logic;
-  
+
+  SIGNAL vrst : std_logic;
   -- OVO -----------------------------------------
   FUNCTION CC(i : character) RETURN unsigned IS
   BEGIN
@@ -340,6 +346,7 @@ ARCHITECTURE struct OF emu IS
   SIGNAL ovo_in1  : unsigned(0 TO 32*5-1) :=(OTHERS =>'0');
   
   -- OVO -----------------------------------------
+  FILE fil : text OPEN write_mode IS "trace_mem.log";
   
 BEGIN
 
@@ -352,8 +359,8 @@ BEGIN
       conf_str           => to_slv(CONF_STR),
       buttons            => buttons,
       forced_scandoubler => OPEN,
-      joystick_0         => OPEN,
-      joystick_1         => OPEN,
+      joystick_0         => joystick_0,
+      joystick_1         => joystick_1,
       joystick_analog_0  => joystick_analog_0,
       joystick_analog_1  => joystick_analog_1,
       status             => status,
@@ -394,6 +401,7 @@ BEGIN
   ntsc_pal<=status(0);
   arca<=status(1); -- 0=Interton VC2000  1= Emerson Arcadia
   swap<=status(3);
+  swapxy<=status(4); 
 
   ----------------------------------------------------------
   ipll : pll
@@ -414,10 +422,11 @@ BEGIN
   ----------------------------------------------------------
   -- Interton VC4000 & clones
   --  xx0 0aaa aaaa aaaa : Cardtrige : 2ko
-  --  xx0 1aaa aaaa aaaa : RAM hobby computer
+  --  xx0 1aaa aaaa aaaa : RAM hobby computer / Cartdridge 4ko
+  --  xx1 00aa aaaa aaaa : RAM option 1ko
   --  xx1 x110 1aaa aaaa : Key inputs
   --  xx1 x111 aaaa aaaa : Video PVI
-
+  
   -- PVI : Programmable Video Interface
   i_sgs2636: ENTITY work.sgs2636
     PORT MAP (
@@ -430,7 +439,8 @@ BEGIN
       int       => int_pvi,
       intack    => intack,
       ivec      => ivec,
-      vid_rgb   => in_vid_rgb,
+      vrst      => vrst,
+      vid_argb  => in_vid_argb,
       vid_de    => in_vid_de,
       vid_hsyn  => in_vid_hsyn,
       vid_vsyn  => in_vid_vsyn,
@@ -453,13 +463,23 @@ BEGIN
           in_keypad2_3 WHEN ad_delay(3 DOWNTO 0)=x"E" ELSE -- 1E8E
           x"00";
 
-  in_keypad1_1<=key_rc & key_bp  & key_pc  & key_minus & "0000";
-  in_keypad1_2<=key_wc & key_reg & key_mem & key_plus  & "0000";
-  in_keypad1_3<=key_c  & key_8   & key_4   & key_0     & "0000";
-  in_keypad2_1<=key_d  & key_9   & key_5   & key_1     & "0000";
-  in_keypad2_2<=key_e  & key_a   & key_6   & key_2     & "0000";
-  in_keypad2_3<=key_f  & key_b   & key_7   & key_3     & "0000";
-  in_keypanel <=key_start & key_select & "000000";
+  in_keypad1_1<=((key_rc & key_bp  & key_pc  & key_minus) OR
+                 (joystick_0(11) & joystick_0(8)  & joystick_0(3) & joystick_0(0))) & "0000";
+  in_keypad1_2<=((key_wc & key_reg & key_mem & key_plus) OR
+                 (joystick_0(12) & joystick_0(9)  & joystick_0(6) & joystick_0(1))) & "0000";
+  in_keypad1_3<=((key_c  & key_8   & key_4   & key_0   ) OR
+                 (joystick_0(13) & joystick_0(10) & joystick_0(7) & joystick_0(2))) & "0000";
+  
+  in_keypad2_1<=((key_d  & key_9   & key_5   & key_1   ) OR
+                 (joystick_1(11) & joystick_1(8)  & joystick_1(3) & joystick_1(0))) & "0000";
+  in_keypad2_2<=((key_e  & key_a   & key_6   & key_2   ) OR
+                 (joystick_1(12) & joystick_1(9)  & joystick_1(6) & joystick_1(1))) & "0000";
+  in_keypad2_3<=((key_f  & key_b   & key_7   & key_3   ) OR
+                 (joystick_1(13) & joystick_1(10) & joystick_1(7) & joystick_1(2))) & "0000";
+  
+  in_keypanel <=((key_select & key_start) OR
+                 (joystick_0(4) & joystick_0(5)) OR
+                 (joystick_1(4) & joystick_1(5))) & "000000";
 
   in_volnoise <=vol & icol & explo & noise & "000";
   
@@ -477,6 +497,12 @@ BEGIN
   --P  M  4      5  6  7
   --X  G  8      9  A  B
   --R  W  C      D  E  F
+
+  -- Joystick mapping :
+  -- 0  1  2   select=4
+  -- 3  6  7   start =5
+  -- 8  9 10
+  --11 12 13     
   
   -- KEY    Mapped on keyboard :
   
@@ -496,7 +522,7 @@ BEGIN
   --  x01 1001 1xxx xxxx : Video UVI regs : 1980
   --  x01 1010 aaaa aaaa : Video UVI RAM  : 1A00
   --  x10 aaaa aaaa aaaa : Cardridge high : 2000
-  
+
   i_sgs2637: ENTITY work.sgs2637
     PORT MAP (
       ad        => ad,
@@ -505,7 +531,7 @@ BEGIN
       req       => req_uvi,
       ack       => ack_uvi,
       wr        => wr,
-      vid_rgb   => ac_vid_rgb,
+      vid_argb  => ac_vid_argb,
       vid_de    => ac_vid_de,
       vid_hsyn  => ac_vid_hsyn,
       vid_vsyn  => ac_vid_vsyn,
@@ -525,15 +551,23 @@ BEGIN
   --   7 8 9
   -- ENT 0 CLR
 
-  ac_keypad1_1<="0000" & key_1 & key_4 & key_7 & key_b ; -- 1900
-  ac_keypad1_2<="0000" & key_2 & key_5 & key_8 & key_0 ; -- 1901
-  ac_keypad1_3<="0000" & key_3 & key_6 & key_9 & key_a ; -- 1902
+  ac_keypad1_1<="0000" & ((key_1 & key_4 & key_7 & key_b) OR
+                          (joystick_0(0) & joystick_0(3) & joystick_0(8) & joystick_0(11))) ; -- 1900
+  ac_keypad1_2<="0000" & ((key_2 & key_5 & key_8 & key_0) OR
+                          (joystick_0(1) & joystick_0(6) & joystick_0(9) & joystick_0(12))) ; -- 1901
+  ac_keypad1_3<="0000" & ((key_3 & key_6 & key_9 & key_a) OR
+                          (joystick_0(2) & joystick_0(7) & joystick_0(10) & joystick_0(13))) ; -- 1902
   
-  ac_keypad2_1<="0000" & key_1 & key_4 & key_7 & key_b ; -- 1904
-  ac_keypad2_2<="0000" & key_2 & key_5 & key_8 & key_0 ; -- 1905
-  ac_keypad2_3<="0000" & key_3 & key_6 & key_9 & key_a ; -- 1906
+  ac_keypad2_1<="0000" & ((key_1 & key_4 & key_7 & key_b) OR
+                          (joystick_1(0) & joystick_1(3) & joystick_1(8) & joystick_1(11))) ; -- 1904
+  ac_keypad2_2<="0000" & ((key_2 & key_5 & key_8 & key_0) OR
+                          (joystick_1(1) & joystick_1(6) & joystick_1(9) & joystick_1(12))) ; -- 1905
+  ac_keypad2_3<="0000" & ((key_3 & key_6 & key_9 & key_a) OR
+                          (joystick_1(2) & joystick_1(7) & joystick_1(10) & joystick_1(13))) ; -- 1906
   
-  ac_keypanel <="00000" & key_reg & key_select & key_start; -- 1908. <Latched>
+  ac_keypanel <="00000" & ((key_reg & key_select & key_start) OR
+                           (joystick_0(14) & joystick_0(4) & joystick_0(5)) OR
+                           (joystick_1(14) & joystick_1(4) & joystick_1(5))); -- 1908. <Latched>
   
   dr_ac_key<=ac_keypad1_1 WHEN ad_delay(3 DOWNTO 0)=x"0" ELSE -- 1900
              ac_keypad1_2 WHEN ad_delay(3 DOWNTO 0)=x"1" ELSE -- 1901
@@ -545,17 +579,21 @@ BEGIN
              x"00";
   
   ----------------------------------------------------------
-  sense <=vid_vsyn;
+  sense <=vrst;
   
-  potl_h<=mux(swap,unsigned(joystick_analog_1( 7 DOWNTO 0)),
-                   unsigned(joystick_analog_0( 7 DOWNTO 0)))+x"80";
-  potl_v<=mux(swap,unsigned(joystick_analog_1(15 DOWNTO 8)),
+  potl_a<=mux(swap,unsigned(joystick_analog_1(15 DOWNTO 8)),
                    unsigned(joystick_analog_0(15 DOWNTO 8)))+x"80";
+  potl_b<=mux(swap,unsigned(joystick_analog_1( 7 DOWNTO 0)),
+                   unsigned(joystick_analog_0( 7 DOWNTO 0)))+x"80";
+  potl_h<=mux(swapxy,potl_a,potl_b);
+  potl_v<=mux(swapxy,potl_b,potl_a);
   
-  potr_h<=mux(swap,unsigned(joystick_analog_0( 7 DOWNTO 0)),
-                   unsigned(joystick_analog_1( 7 DOWNTO 0)))+x"80";
-  potr_v<=mux(swap,unsigned(joystick_analog_0(15 DOWNTO 8)),
+  potr_a<=mux(swap,unsigned(joystick_analog_0(15 DOWNTO 8)),
                    unsigned(joystick_analog_1(15 DOWNTO 8)))+x"80";
+  potr_b<=mux(swap,unsigned(joystick_analog_0( 7 DOWNTO 0)),
+                   unsigned(joystick_analog_1( 7 DOWNTO 0)))+x"80";
+  potr_h<=mux(swapxy,potr_a,potr_b);
+  potr_v<=mux(swapxy,potr_b,potr_a);
   
   ----------------------------------------------------------
   KeyCodes:PROCESS (clksys,reset_na) IS
@@ -623,13 +661,16 @@ BEGIN
     END IF;
   END PROCESS KeyCodes;
 
-
+  --key_start<='0',
+  --            '1' AFTER 200 ms,
+  --            '0' AFTER 500 ms;
+  
   ----------------------------------------------------------
   
   dr<=dr_pvi    WHEN arca='0' AND
-        ad_delay(12)='1' AND ad_delay(10 DOWNTO 8)="111" ELSE -- PVI Interton
+        ad_delay(12)='1' AND ad_delay(11 DOWNTO 8)="1111" ELSE -- PVI Interton
       dr_in_key WHEN arca='0' AND
-        ad_delay(12)='1' AND ad_delay(10 DOWNTO 8)="110" ELSE
+        ad_delay(12)='1' AND ad_delay(11 DOWNTO 8)="1110" ELSE
         
       dr_uvi    WHEN arca='1' AND
         ad_delay(12)='1' AND ad_delay(11 DOWNTO 8)="1000" ELSE -- UVI Arcadia
@@ -640,10 +681,8 @@ BEGIN
       dr_uvi    WHEN arca='1' AND
         ad_delay(12)='1' AND ad_delay(11 DOWNTO 8)="1010" ELSE -- UVI Arcadia
         
-      dr_rom WHEN
-        ad_delay(12)='0' ELSE -- Cardridge
-      x"00";
-
+      dr_rom  -- Cardridge
+      ;
   
   req_pvi<=NOT arca AND req AND tick_cpu WHEN
             ad(12)='1' AND ad(10 DOWNTO 8)="111" ELSE '0';
@@ -675,11 +714,38 @@ BEGIN
       clk      => clksys,
       reset_na => reset_na);
   
+  ----------------------------------------------------------
+--pragma synthesis_off
+  Dump:PROCESS IS
+    VARIABLE lout : line;
+    VARIABLE doread : boolean := false;
+    VARIABLE adr : uv15;
+  BEGIN
+    wure(clksys);
+    IF doread THEN
+      write(lout,"RD(" & to_hstring('0' & adr) & ")=" & to_hstring(dr));
+      writeline(fil,lout);
+      doread:=false;
+    END IF;
+    IF req='1' AND ack='1' AND reset='0' AND reset_na='1' THEN
+      IF wr='1' THEN
+        write(lout,"WR(" & to_hstring('0' & ad) & ")=" & to_hstring(dw));
+        writeline(fil,lout);
+      ELSE
+        doread:=true;
+        adr:=ad;
+      END IF;
+    END IF;
+  END PROCESS Dump;
+
+--pragma synthesis_on
+  ----------------------------------------------------------
+  
   ad_delay<=ad WHEN rising_edge(clksys);
   
-  vga_r_i<=(OTHERS => vid_rgb(2));
-  vga_g_i<=(OTHERS => vid_rgb(1));
-  vga_b_i<=(OTHERS => vid_rgb(0));
+  vga_r_i<=(7=>vid_argb(2) AND vid_argb(3),OTHERS => vid_argb(2));
+  vga_g_i<=(7=>vid_argb(1) AND vid_argb(3),OTHERS => vid_argb(1));
+  vga_b_i<=(7=>vid_argb(0) AND vid_argb(3),OTHERS => vid_argb(0));
   
   vga_sl<="00";
   vga_f1<='0';
@@ -697,7 +763,7 @@ BEGIN
   ----------------------------------------------------------
   -- MUX VIDEO
   
-  vid_rgb <=mux(arca,ac_vid_rgb ,in_vid_rgb)  WHEN rising_edge(clksys);
+  vid_argb<=mux(arca,ac_vid_argb,in_vid_argb)  WHEN rising_edge(clksys);
   vid_de  <=mux(arca,ac_vid_de  ,in_vid_de )  WHEN rising_edge(clksys);
   vid_hsyn<=mux(arca,ac_vid_hsyn,in_vid_hsyn) WHEN rising_edge(clksys);
   vid_vsyn<=mux(arca,ac_vid_vsyn,in_vid_vsyn) WHEN rising_edge(clksys);
@@ -774,16 +840,16 @@ BEGIN
   ----------------------------------------------------------
   -- ROM / RAM
 
-  wcart<=wr AND req AND ack WHEN ad(12)='0' ELSE '0';
+  wcart<=wr AND req AND ack; -- WHEN ad(12)='0' ELSE '0';
   
   icart:PROCESS(clksys) IS
   BEGIN
     IF rising_edge(clksys) THEN
-      dr_rom<=cart(to_integer(ad(13) & ad(11 DOWNTO 0))); -- 8kB
+      dr_rom<=cart(to_integer(ad(13 DOWNTO 0))); -- 8kB
       
       IF wcart='1' THEN
-        -- Hobby Computer RAM
-        cart(to_integer(ad(13) & ad(11 DOWNTO 0))):=dw;
+        -- RAM
+        cart(to_integer(ad(13 DOWNTO 0))):=dw;
       END IF;
     END IF;
   END PROCESS icart;
