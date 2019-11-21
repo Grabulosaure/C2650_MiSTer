@@ -25,7 +25,7 @@ ENTITY emu IS
     reset            : IN    std_logic;
 
     -- Must be passed to hps_io module
-    hps_bus          : INOUT std_logic_vector(44 DOWNTO 0);
+    hps_bus          : INOUT std_logic_vector(45 DOWNTO 0);
     
     -- Base video clock. Usually equals to CLK_SYS.
     clk_video        : OUT   std_logic;
@@ -34,9 +34,6 @@ ENTITY emu IS
     -- Must be based on CLK_VIDEO
     ce_pixel         : OUT   std_logic;
 
-    -- Video aspect ratio for HDMI. Most retro systems have ratio 4:3.
-    video_arx        : OUT   std_logic_vector(7 DOWNTO 0);
-    video_ary        : OUT   std_logic_vector(7 DOWNTO 0);
 
     -- VGA
     vga_r            : OUT   std_logic_vector(7 DOWNTO 0);
@@ -57,6 +54,11 @@ ENTITY emu IS
     led_power        : OUT   std_logic_vector(1 DOWNTO 0);
     led_disk         : OUT   std_logic_vector(1 DOWNTO 0);
 
+    buttons          : OUT   std_logic_vector(1 DOWNTO 0);
+    -- Video aspect ratio for HDMI. Most retro systems have ratio 4:3.
+    video_arx        : OUT   std_logic_vector(7 DOWNTO 0);
+    video_ary        : OUT   std_logic_vector(7 DOWNTO 0);
+    
     -- AUDIO
     audio_l          : OUT   std_logic_vector(15 DOWNTO 0);
     audio_r          : OUT   std_logic_vector(15 DOWNTO 0);
@@ -64,7 +66,7 @@ ENTITY emu IS
     -- 0 - no mix, 1 - 25%, 2 - 50%, 3 - 100% (mono)
     audio_mix        : OUT   std_logic_vector(1 DOWNTO 0);
     
-    tape_in          : IN    std_logic;
+    adc_bus          : INOUT std_logic_vector(3 DOWNTO 0);
     
     -- SD-SPI
     sd_sck           : OUT   std_logic := 'Z';
@@ -97,7 +99,19 @@ ENTITY emu IS
     sdram_ncs        : OUT   std_logic;
     sdram_ncas       : OUT   std_logic;
     sdram_nras       : OUT   std_logic;
-    sdram_nwe        : OUT   std_logic);
+    sdram_nwe        : OUT   std_logic;
+    
+    uart_cts         : IN    std_logic;
+    uart_rts         : OUT   std_logic;
+    uart_rxd         : IN    std_logic;
+    uart_txd         : OUT   std_logic;
+    uart_dtr         : OUT   std_logic;
+    uart_dsr         : IN    std_logic;
+    
+    user_in          : IN    std_logic_vector(5 DOWNTO 0);
+    user_out         : OUT   std_logic_vector(5 DOWNTO 0);
+    
+    osd_status       : IN    std_logic);
 END emu;
 
 ARCHITECTURE struct OF emu IS
@@ -142,73 +156,81 @@ ARCHITECTURE struct OF emu IS
 
   COMPONENT hps_io
     GENERIC (
-      STRLEN : integer := 0;
+      STRLEN : integer;
       PS2DIV : integer := 1000;
       WIDE   : integer := 0; --  8bits download bus
       VDNUM  : integer := 1;
       PS2WE  : integer := 0);
     PORT (
       clk_sys           : IN  std_logic;
-      hps_bus           : INOUT std_logic_vector(44 DOWNTO 0);
+      hps_bus           : INOUT std_logic_vector(45 DOWNTO 0);
 
       conf_str          : IN  std_logic_vector(8*STRLEN-1 DOWNTO 0);
-
-      buttons           : OUT std_logic_vector(1 DOWNTO 0);
-      forced_scandoubler: OUT std_logic;
-
-      joystick_0        : OUT std_logic_vector(15 DOWNTO 0);
-      joystick_1        : OUT std_logic_vector(15 DOWNTO 0);
+      joystick_0        : OUT std_logic_vector(31 DOWNTO 0);
+      joystick_1        : OUT std_logic_vector(31 DOWNTO 0);
+      joystick_2        : OUT std_logic_vector(31 DOWNTO 0);
+      joystick_3        : OUT std_logic_vector(31 DOWNTO 0);
+      joystick_4        : OUT std_logic_vector(31 DOWNTO 0);
+      joystick_5        : OUT std_logic_vector(31 DOWNTO 0);
       joystick_analog_0 : OUT std_logic_vector(15 DOWNTO 0);
       joystick_analog_1 : OUT std_logic_vector(15 DOWNTO 0);
+      joystick_analog_2 : OUT std_logic_vector(15 DOWNTO 0);
+      joystick_analog_3 : OUT std_logic_vector(15 DOWNTO 0);
+      joystick_analog_4 : OUT std_logic_vector(15 DOWNTO 0);
+      joystick_analog_5 : OUT std_logic_vector(15 DOWNTO 0);
+      buttons           : OUT std_logic_vector(1 DOWNTO 0);
+      forced_scandoubler: OUT std_logic;
       status            : OUT std_logic_vector(31 DOWNTO 0);
-
+      status_in         : IN  std_logic_vector(31 DOWNTO 0);
+      status_set        : IN  std_logic;
+      status_menumask   : IN  std_logic_vector(15 DOWNTO 0);
+      new_vmode         : IN  std_logic;
+      img_mounted       : OUT std_logic;
+      img_readonly      : OUT std_logic;
+      img_size          : OUT std_logic_vector(63 DOWNTO 0);
       sd_lba            : IN  std_logic_vector(31 DOWNTO 0);
       sd_rd             : IN  std_logic;
       sd_wr             : IN  std_logic;
       sd_ack            : OUT std_logic;
       sd_conf           : IN  std_logic;
       sd_ack_conf       : OUT std_logic;
-
       sd_buff_addr      : OUT std_logic_vector(8 DOWNTO 0);
       sd_buff_dout      : OUT std_logic_vector(7 DOWNTO 0);
       sd_buff_din       : IN  std_logic_vector(7 DOWNTO 0);
       sd_buff_wr        : OUT std_logic;
-
-      img_mounted       : OUT std_logic;
-      img_size          : OUT std_logic_vector(63 DOWNTO 0);
-      img_readonly      : OUT std_logic;
-
       ioctl_download    : OUT std_logic;
       ioctl_index       : OUT std_logic_vector(7 DOWNTO 0);
       ioctl_wr          : OUT std_logic;
       ioctl_addr        : OUT std_logic_vector(24 DOWNTO 0);
       ioctl_dout        : OUT std_logic_vector(7 DOWNTO 0);
       ioctl_wait        : IN  std_logic;
-      
       rtc               : OUT std_logic_vector(64 DOWNTO 0);
       timestamp         : OUT std_logic_vector(32 DOWNTO 0);
-
+      uart_mode         : IN  std_logic_vector(15 DOWNTO 0);
       ps2_kbd_clk_out   : OUT std_logic;
       ps2_kbd_data_out  : OUT std_logic;
       ps2_kbd_clk_in    : IN  std_logic;
       ps2_kbd_data_in   : IN  std_logic;
-
       ps2_kbd_led_use   : IN  std_logic_vector(2 DOWNTO 0);
       ps2_kbd_led_status: IN  std_logic_vector(2 DOWNTO 0);
-
       ps2_mouse_clk_out : OUT std_logic;
       ps2_mouse_data_out: OUT std_logic;
       ps2_mouse_clk_in  : IN  std_logic;
       ps2_mouse_data_in : IN  std_logic;
-
       ps2_key           : OUT std_logic_vector(10 DOWNTO 0);
-      ps2_mouse         : OUT std_logic_vector(24 DOWNTO 0));
+      ps2_mouse         : OUT std_logic_vector(24 DOWNTO 0);
+      ps2_mouse_ext     : OUT std_logic_vector(15 DOWNTO 0));
   END COMPONENT hps_io;
-
-  SIGNAL buttons          : std_logic_vector(1 DOWNTO 0);
-  SIGNAL status           : std_logic_vector(31 DOWNTO 0);
-  SIGNAL joystick_0       : std_logic_vector(15 DOWNTO 0);
-  SIGNAL joystick_1       : std_logic_vector(15 DOWNTO 0);
+  
+  SIGNAL buttonsi        : std_logic_vector(1 DOWNTO 0);
+  SIGNAL status          : std_logic_vector(31 DOWNTO 0);
+  SIGNAL status_in       : std_logic_vector(31 DOWNTO 0):=x"00000000";
+  SIGNAL status_set      : std_logic :='0';
+  SIGNAL status_menumask : std_logic_vector(15 DOWNTO 0):=x"0000";
+  SIGNAL new_vmode       : std_logic :='0';
+  
+  SIGNAL joystick_0       : std_logic_vector(31 DOWNTO 0);
+  SIGNAL joystick_1       : std_logic_vector(31 DOWNTO 0);
   SIGNAL joystick_analog_0 : std_logic_vector(15 DOWNTO 0);
   SIGNAL joystick_analog_1 : std_logic_vector(15 DOWNTO 0);
  
@@ -357,13 +379,28 @@ BEGIN
       clk_sys            => clksys,
       hps_bus            => hps_bus,
       conf_str           => to_slv(CONF_STR),
-      buttons            => buttons,
-      forced_scandoubler => OPEN,
       joystick_0         => joystick_0,
       joystick_1         => joystick_1,
+      joystick_2         => OPEN,
+      joystick_3         => OPEN,
+      joystick_4         => OPEN,
+      joystick_5         => OPEN,
       joystick_analog_0  => joystick_analog_0,
       joystick_analog_1  => joystick_analog_1,
+      joystick_analog_2  => OPEN,
+      joystick_analog_3  => OPEN,
+      joystick_analog_4  => OPEN,
+      joystick_analog_5  => OPEN,
+      buttons            => buttonsi,
+      forced_scandoubler => OPEN,
       status             => status,
+      status_in          => status_in,
+      status_set         => status_set,
+      status_menumask    => status_menumask,
+      new_vmode          => new_vmode,
+      img_mounted        => OPEN,
+      img_readonly       => OPEN,
+      img_size           => OPEN,
       sd_lba             => std_logic_vector'(x"0000_0000"),
       sd_rd              => '0',
       sd_wr              => '0',
@@ -385,6 +422,7 @@ BEGIN
       ioctl_wait         => ioctl_wait,
       rtc                => OPEN,
       timestamp          => OPEN,
+      uart_mode          => std_logic_vector'(x"0000"),
       ps2_kbd_clk_out    => OPEN,
       ps2_kbd_data_out   => OPEN,
       ps2_kbd_clk_in     => '1',
@@ -401,7 +439,9 @@ BEGIN
   ntsc_pal<=status(0);
   arca<=status(1); -- 0=Interton VC2000  1= Emerson Arcadia
   swap<=status(3);
-  swapxy<=status(4); 
+  swapxy<=status(4);
+
+  buttons<=buttonsi;
 
   ----------------------------------------------------------
   ipll : pll
@@ -509,6 +549,7 @@ BEGIN
   -- Additional buttons :
   -- START
   -- SELECT
+
   
   -- flag : Joystick : 0=Horizontal 1=Vertical
   pot2<=potr_v WHEN flag='1' ELSE potr_h;
