@@ -1126,7 +1126,7 @@ emu emu
 	.LED_USER(led_user),
 	.LED_POWER(led_power),
 	.LED_DISK(led_disk),
-	.BUTTONS(btn),
+	//.BUTTONS(btn),
 
 	.VIDEO_ARX(ARX),
 	.VIDEO_ARY(ARY),

@@ -9,7 +9,6 @@
 LIBRARY IEEE;
 USE IEEE.std_logic_1164.all;
 USE IEEE.numeric_std.all;
-USE IEEE.std_logic_unsigned.ALL;
 
 USE std.textio.ALL;
 
@@ -33,8 +32,7 @@ ENTITY emu IS
     -- Multiple resolutions are supported using different CE_PIXEL rates.
     -- Must be based on CLK_VIDEO
     ce_pixel         : OUT   std_logic;
-
-
+    
     -- VGA
     vga_r            : OUT   std_logic_vector(7 DOWNTO 0);
     vga_g            : OUT   std_logic_vector(7 DOWNTO 0);
@@ -47,15 +45,13 @@ ENTITY emu IS
     
     -- LED
     led_user         : OUT   std_logic; -- 1 - ON, 0 - OFF.
-
+    
     -- b[1]: 0 - LED status is system status ORed with b[0]
     --       1 - LED status is controled solely by b[0]
     -- hint: supply 2'b00 to let the system control the LED.
     led_power        : OUT   std_logic_vector(1 DOWNTO 0);
     led_disk         : OUT   std_logic_vector(1 DOWNTO 0);
-
-    buttons          : OUT   std_logic_vector(1 DOWNTO 0);
-    -- Video aspect ratio for HDMI. Most retro systems have ratio 4:3.
+    
     video_arx        : OUT   std_logic_vector(7 DOWNTO 0);
     video_ary        : OUT   std_logic_vector(7 DOWNTO 0);
     
@@ -131,13 +127,13 @@ ARCHITECTURE struct OF emu IS
   CONSTANT CONF_STR : string := 
     "CO2650;;" &
     "F,BIN,Load Cartridge;" &
-    "O0,Video standard,PAL,NTSC;" &
+--    "O5,Video standard,PAL,NTSC;" &
+    "O6,Aspect ratio,4:3,16:9;" &
     "O1,Mode,Interton,Arcadia;" &
     "O3,Swap Joystick,Off,On;" &
     "O4,Swap Joystick XY,Off,On;" &
     "O2,Overlay,Off,On;" &
-    "R0,Reset & Detach cartridge;" &
-    "J,Start,Select,B1,B2,B3,B4,B5,B6,B7,B8,B9;" &
+    "J,Start,Select,1,2,3,4,5,6,7,8,9,10,11,12;" &
     "V1.0";
 
   FUNCTION to_slv(s: string) return std_logic_vector is 
@@ -222,17 +218,16 @@ ARCHITECTURE struct OF emu IS
       ps2_mouse_ext     : OUT std_logic_vector(15 DOWNTO 0));
   END COMPONENT hps_io;
   
-  SIGNAL buttonsi        : std_logic_vector(1 DOWNTO 0);
+  SIGNAL joystick_0      : std_logic_vector(31 DOWNTO 0);
+  SIGNAL joystick_1      : std_logic_vector(31 DOWNTO 0);
+  SIGNAL joystick_analog_0 : std_logic_vector(15 DOWNTO 0);
+  SIGNAL joystick_analog_1 : std_logic_vector(15 DOWNTO 0);
+  SIGNAL buttons         : std_logic_vector(1 DOWNTO 0);
   SIGNAL status          : std_logic_vector(31 DOWNTO 0);
   SIGNAL status_in       : std_logic_vector(31 DOWNTO 0):=x"00000000";
   SIGNAL status_set      : std_logic :='0';
   SIGNAL status_menumask : std_logic_vector(15 DOWNTO 0):=x"0000";
   SIGNAL new_vmode       : std_logic :='0';
-  
-  SIGNAL joystick_0       : std_logic_vector(31 DOWNTO 0);
-  SIGNAL joystick_1       : std_logic_vector(31 DOWNTO 0);
-  SIGNAL joystick_analog_0 : std_logic_vector(15 DOWNTO 0);
-  SIGNAL joystick_analog_1 : std_logic_vector(15 DOWNTO 0);
  
   SIGNAL ioctl_download   : std_logic;
   SIGNAL ioctl_index      : std_logic_vector(7 DOWNTO 0);
@@ -369,6 +364,8 @@ ARCHITECTURE struct OF emu IS
   
   -- OVO -----------------------------------------
   FILE fil : text OPEN write_mode IS "trace_mem.log";
+
+  SIGNAL vcbm1,vcbm2,vcbm3,vcbm4 : uv8;
   
 BEGIN
 
@@ -379,6 +376,8 @@ BEGIN
       clk_sys            => clksys,
       hps_bus            => hps_bus,
       conf_str           => to_slv(CONF_STR),
+      buttons            => buttons,
+      forced_scandoubler => OPEN,
       joystick_0         => joystick_0,
       joystick_1         => joystick_1,
       joystick_2         => OPEN,
@@ -391,8 +390,6 @@ BEGIN
       joystick_analog_3  => OPEN,
       joystick_analog_4  => OPEN,
       joystick_analog_5  => OPEN,
-      buttons            => buttonsi,
-      forced_scandoubler => OPEN,
       status             => status,
       status_in          => status_in,
       status_set         => status_set,
@@ -411,9 +408,6 @@ BEGIN
       sd_buff_dout       => OPEN,
       sd_buff_din        => std_logic_vector'(x"00"),
       sd_buff_wr         => OPEN,
-      img_mounted        => OPEN,
-      img_size           => OPEN,
-      img_readonly       => OPEN,
       ioctl_download     => ioctl_download,
       ioctl_index        => ioctl_index,
       ioctl_wr           => ioctl_wr,
@@ -434,15 +428,52 @@ BEGIN
       ps2_mouse_clk_in   => '1',
       ps2_mouse_data_in  => '1',
       ps2_key            => ps2_key,
-      ps2_mouse          => OPEN);
-
-  ntsc_pal<=status(0);
-  arca<=status(1); -- 0=Interton VC2000  1= Emerson Arcadia
+      ps2_mouse          => OPEN,
+      ps2_mouse_ext      => OPEN);
+  
+  ntsc_pal<='1'; --status(5);
+  arca<=status(1); -- 0=Interton VC2000  1=Emerson Arcadia
   swap<=status(3);
-  swapxy<=status(4);
+  swapxy<=status(4); 
 
-  buttons<=buttonsi;
+  ----------------------------------------------------------
+  
+  vga_sl<="00";
+  vga_f1<='0';
+  
+  video_arx <= x"04" WHEN status(6)='0' ELSE x"16";
+  video_ary <= x"03" WHEN status(6)='0' ELSE x"09";
 
+  ----------------------------------------------------------
+  sd_sck<='0';
+  sd_mosi<='0';
+  sd_cs<='0';
+  ddram_clk<='0';
+  ddram_burstcnt<=(OTHERS =>'0');
+  ddram_addr   <=(OTHERS =>'0');
+  ddram_rd     <='0';
+  ddram_din    <=(OTHERS =>'0');
+  ddram_be     <=(OTHERS =>'0');
+  ddram_we     <='0';
+  
+  -- SDRAM interface with lower latency
+  sdram_clk    <='0';
+  sdram_cke    <='0';
+  sdram_a      <=(OTHERS =>'0');
+  sdram_ba     <=(OTHERS =>'0');
+  sdram_dq     <=(OTHERS =>'0');
+  sdram_dqml   <='0';
+  sdram_dqmh   <='0';
+  sdram_ncs    <='0';
+  sdram_ncas   <='0';
+  sdram_nras   <='0';
+  sdram_nwe    <='0';
+  uart_rts     <='0';
+  uart_txd     <='0';
+  uart_dtr     <='0';
+  user_out     <=(OTHERS =>'Z');
+  
+  
   ----------------------------------------------------------
   ipll : pll
     PORT MAP (
@@ -489,6 +520,10 @@ BEGIN
       pot1      => pot1,
       pot2      => pot2,
       np        => ntsc_pal,
+      vcbm1     => vcbm1,
+      vcbm2     => vcbm2,
+      vcbm3     => vcbm3,
+      vcbm4     => vcbm4,
       reset     => reset,
       clk       => clksys,
       reset_na  => reset_na);
@@ -511,7 +546,7 @@ BEGIN
                  (joystick_0(13) & joystick_0(10) & joystick_0(7) & joystick_0(2))) & "0000";
   
   in_keypad2_1<=((key_d  & key_9   & key_5   & key_1   ) OR
-                 (joystick_1(11) & joystick_1(8)  & joystick_1(3) & joystick_1(0))) & "0000";
+                 (joystick_1(11) & joystick_1(8)  & joystick_1(3) & joystick_1(07))) & "0000";
   in_keypad2_2<=((key_e  & key_a   & key_6   & key_2   ) OR
                  (joystick_1(12) & joystick_1(9)  & joystick_1(6) & joystick_1(1))) & "0000";
   in_keypad2_3<=((key_f  & key_b   & key_7   & key_3   ) OR
@@ -549,7 +584,6 @@ BEGIN
   -- Additional buttons :
   -- START
   -- SELECT
-
   
   -- flag : Joystick : 0=Horizontal 1=Vertical
   pot2<=potr_v WHEN flag='1' ELSE potr_h;
@@ -710,7 +744,7 @@ BEGIN
   ----------------------------------------------------------
   
   dr<=dr_pvi    WHEN arca='0' AND
-        ad_delay(12)='1' AND ad_delay(11 DOWNTO 8)="1111" ELSE -- PVI Interton
+        ad_delay(12)='1' AND ad_delay(10 DOWNTO 8)="111" ELSE -- PVI Interton
       dr_in_key WHEN arca='0' AND
         ad_delay(12)='1' AND ad_delay(11 DOWNTO 8)="1110" ELSE
         
@@ -736,7 +770,6 @@ BEGIN
 
   ad_rom <="000" & ad(11 DOWNTO 0) WHEN arca='1' AND ad(14 DOWNTO 12)="000" ELSE
            "001" & ad(11 DOWNTO 0) WHEN arca='1' AND ad(14 DOWNTO 12)="010" ELSE
-
             ad;
   -- CPU
   i_sgs2650: ENTITY work.sgs2650
@@ -793,9 +826,6 @@ BEGIN
   vga_g_i<=(7=>vid_argb(1) AND vid_argb(3),OTHERS => vid_argb(1));
   vga_b_i<=(7=>vid_argb(0) AND vid_argb(3),OTHERS => vid_argb(0));
   
-  vga_sl<="00";
-  vga_f1<='0';
-  
   clk_video<=clksys;
   ce_pixel<=vid_ce;
   
@@ -814,9 +844,7 @@ BEGIN
   vid_hsyn<=mux(arca,ac_vid_hsyn,in_vid_hsyn) WHEN rising_edge(clksys);
   vid_vsyn<=mux(arca,ac_vid_vsyn,in_vid_vsyn) WHEN rising_edge(clksys);
   vid_ce  <=mux(arca,ac_vid_ce  ,in_vid_ce)   WHEN rising_edge(clksys);
-  video_arx <= X"04";
-  video_ary <= X"03";
-
+  
   sound <=mux(arca,ac_sound,in_sound) WHEN rising_edge(clksys);
   ----------------------------------------------------------
   i_ovo: ENTITY work.ovo
@@ -878,6 +906,45 @@ BEGIN
     CC(' ');
     
   ovo_in1<=ovo_in0;
+  --ovo_in1<=
+  --  '0' & vcbm1(7 DOWNTO 4) & 
+  --  '0' & vcbm1(3 DOWNTO 0) & 
+  --  "10000" & 
+  --  '0' & vcbm2(7 DOWNTO 4) & 
+  --  '0' & vcbm2(3 DOWNTO 0) & 
+  --  "10000" &
+  --  '0' & vcbm3(7 DOWNTO 4) & 
+  --  '0' & vcbm3(3 DOWNTO 0) & 
+  --  "10000" &
+  --  '0' & vcbm4(7 DOWNTO 4) & 
+  --  '0' & vcbm4(3 DOWNTO 0) & 
+  --  "10000" &
+  --  '0' & vcbm1(7 DOWNTO 4) & 
+  --  '0' & vcbm1(3 DOWNTO 0) & 
+  --  "10000" & 
+  --  '0' & vcbm2(7 DOWNTO 4) & 
+  --  '0' & vcbm2(3 DOWNTO 0) & 
+  --  "10000" &
+  --  '0' & vcbm3(7 DOWNTO 4) & 
+  --  '0' & vcbm3(3 DOWNTO 0) & 
+  --  "10000" &
+  --  '0' & vcbm4(7 DOWNTO 4) & 
+  --  '0' & vcbm4(3 DOWNTO 0) & 
+  --  "10000" &
+    
+    
+    
+  --  CC(' ') &
+  --  '0' & in_keypanel(7 DOWNTO 4) &
+  --  CC(' ') &
+  --  '0' & in_keypad1_1(7 DOWNTO 4) &
+  --  '0' & in_keypad1_2(7 DOWNTO 4) &
+  --  '0' & in_keypad1_3(7 DOWNTO 4) &
+  --  '0' & in_keypad2_1(7 DOWNTO 4) &
+  --  '0' & in_keypad2_2(7 DOWNTO 4) &
+  --  '0' & in_keypad2_3(7 DOWNTO 4) &
+  --  CC('.') &
+  --  CC(' ');
   
   ovo_ena<=status(2); -- Overlay
   led_power<='1' & vid_vsyn;

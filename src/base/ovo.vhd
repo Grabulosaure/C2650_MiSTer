@@ -42,7 +42,7 @@ ENTITY ovo IS
 
     -- Probes
     in0 : IN unsigned(0 TO COLS*5-1);
-    in1 : IN unsigned(0 TO COLS*5-1)
+    in1 : IN unsigned(0 TO COLS*5-1):=(OTHERS =>'0')
     );
 END ENTITY ovo;
 
