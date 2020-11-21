@@ -112,7 +112,7 @@ END emu;
 
 ARCHITECTURE struct OF emu IS
 
-  CONSTANT CDIV : natural := 12 * 8;
+  CONSTANT CDIV : natural := 4 * 8;
   
   COMPONENT pll IS
     PORT (
@@ -128,14 +128,14 @@ ARCHITECTURE struct OF emu IS
     "CO2650;;" &
     "F,BIN,Load Cartridge;" &
 --    "O5,Video standard,PAL,NTSC;" &
-    "O6,Aspect ratio,4:3,16:9;" &
     "O1,Mode,Interton,Arcadia;" &
     "O3,Swap Joystick,Off,On;" &
     "O4,Swap Joystick XY,Off,On;" &
-    "O2,Overlay,Off,On;" &
+    "OC,Bright,Off,On;" &
+    "O6,Aspect ratio,4:3,16:9;" &
     "J,Start,Select,1,2,3,4,5,6,7,8,9,10,11,12;" &
     "V1.0";
-
+  
   FUNCTION to_slv(s: string) return std_logic_vector is 
     CONSTANT ss : string(1 to s'length) := s; 
     VARIABLE rval : std_logic_vector(1 to 8 * s'length); 
@@ -260,9 +260,13 @@ ARCHITECTURE struct OF emu IS
   SIGNAL ac_keypanel : unsigned(7 DOWNTO 0);
   
   --------------------------------------
-  SIGNAL vol : unsigned(1 DOWNTO 0);
-  SIGNAL icol,explo,noise : std_logic;
-  SIGNAL sound,in_sound,ac_sound : unsigned(7 DOWNTO 0);
+  SIGNAL in_vol : unsigned(1 DOWNTO 0);
+  SIGNAL in_icol,in_explo,in_explo2,in_noise,in_snd : std_logic;
+  SIGNAL sound,in_sound,ac_sound,in_sound2 : unsigned(7 DOWNTO 0);
+  SIGNAL lfsr : uv15;
+  SIGNAL explo : natural RANGE 0 TO 1000000;
+  SIGNAL divlfsr : uint8;
+  
   SIGNAL pot1,pot2 : unsigned(7 DOWNTO 0);
   SIGNAL potl_a,potl_b,potr_a,potr_b : unsigned(7 DOWNTO 0);
   SIGNAL potl_v,potl_h,potr_v,potr_h : unsigned(7 DOWNTO 0);
@@ -274,7 +278,10 @@ ARCHITECTURE struct OF emu IS
   
   SIGNAL ad,ad_delay,ad_rom : unsigned(14 DOWNTO 0);
   SIGNAL dr,dw,dr_pvi,dr_uvi,dr_rom,dr_in_key,dr_ac_key : unsigned(7 DOWNTO 0);
-  SIGNAL req,req_pvi,ack,ack_pvi,req_uvi,ack_uvi : std_logic;
+  SIGNAL req,req_pvi,req_uvi,req_mem : std_logic;
+  SIGNAL ack,ackp,ack_pvi,ack_uvi,ack_mem : std_logic;
+  SIGNAL sel_pvi,sel_uvi,sel_mem : std_logic;
+  SIGNAL ack_mem_p,ack_mem_p2 : std_logic :='0';
   SIGNAL int, int_pvi,intack,creset : std_logic;
   SIGNAL sense,flag : std_logic;
   SIGNAL mio,ene,dc,wr : std_logic;
@@ -296,67 +303,18 @@ ARCHITECTURE struct OF emu IS
   
   SIGNAL wcart : std_logic;
   
-  SIGNAL vid_argb ,in_vid_argb ,ac_vid_argb : unsigned(3 DOWNTO 0);
-  SIGNAL vid_de  ,in_vid_de  ,ac_vid_de   : std_logic;
-  SIGNAL vid_hsyn,in_vid_hsyn,ac_vid_hsyn : std_logic;
-  SIGNAL vid_vsyn,in_vid_vsyn,ac_vid_vsyn : std_logic;
-  SIGNAL vid_ce  ,in_vid_ce  ,ac_vid_ce   : std_logic;
-
-  SIGNAL in_vrst,ac_vrst : std_logic;
-  -- OVO -----------------------------------------
-  FUNCTION CC(i : character) RETURN unsigned IS
-  BEGIN
-    CASE i IS
-      WHEN '0' => RETURN "00000";
-      WHEN '1' => RETURN "00001";
-      WHEN '2' => RETURN "00010";
-      WHEN '3' => RETURN "00011";
-      WHEN '4' => RETURN "00100";
-      WHEN '5' => RETURN "00101";
-      WHEN '6' => RETURN "00110";
-      WHEN '7' => RETURN "00111";
-      WHEN '8' => RETURN "01000";
-      WHEN '9' => RETURN "01001";
-      WHEN 'A' => RETURN "01010";
-      WHEN 'B' => RETURN "01011";
-      WHEN 'C' => RETURN "01100";
-      WHEN 'D' => RETURN "01101";
-      WHEN 'E' => RETURN "01110";
-      WHEN 'F' => RETURN "01111";
-      WHEN ' ' => RETURN "10000";
-      WHEN '=' => RETURN "10001";
-      WHEN '+' => RETURN "10010";
-      WHEN '-' => RETURN "10011";
-      WHEN '<' => RETURN "10100";
-      WHEN '>' => RETURN "10101";
-      WHEN '^' => RETURN "10110";
-      WHEN 'v' => RETURN "10111";
-      WHEN '(' => RETURN "11000";
-      WHEN ')' => RETURN "11001";
-      WHEN ':' => RETURN "11010";
-      WHEN '.' => RETURN "11011";
-      WHEN ',' => RETURN "11100";
-      WHEN '?' => RETURN "11101";
-      WHEN '|' => RETURN "11110";
-      WHEN '#' => RETURN "11111";
-      WHEN OTHERS => RETURN "10000";
-    END CASE;
-  END FUNCTION CC;
-  FUNCTION CS(s : string) RETURN unsigned IS
-    VARIABLE r : unsigned(0 TO s'length*5-1);
-    VARIABLE j : natural :=0;
-  BEGIN
-    FOR i IN s'RANGE LOOP
-      r(j TO j+4) :=CC(s(i));
-      j:=j+5;
-    END LOOP;
-    RETURN r;
-  END FUNCTION CS;
+  SIGNAL vga_argb ,in_vga_argb ,ac_vga_argb : unsigned(3 DOWNTO 0);
+  SIGNAL in_vga_de  ,ac_vga_de   : std_logic;
+  SIGNAL in_vga_hsyn,ac_vga_hsyn : std_logic;
+  SIGNAL in_vga_vsyn,ac_vga_vsyn : std_logic;
+  SIGNAL in_vga_ce  ,ac_vga_ce   : std_logic;
   
-  SIGNAL vga_r_i,vga_r_u   : unsigned(7 DOWNTO 0);
-  SIGNAL vga_g_i,vga_g_u   : unsigned(7 DOWNTO 0);
-  SIGNAL vga_b_i,vga_b_u   : unsigned(7 DOWNTO 0);
-  SIGNAL vga_de_i   : std_logic;
+  SIGNAL in_vrst,ac_vrst : std_logic;
+  
+  SIGNAL vga_r_i  : uv8;
+  SIGNAL vga_g_i  : uv8;
+  SIGNAL vga_b_i  : uv8;
+  SIGNAL vga_de_i : std_logic;
   
   SIGNAL ovo_ena  : std_logic;
   SIGNAL ovo_in0  : unsigned(0 TO 32*5-1) :=(OTHERS =>'0');
@@ -364,8 +322,6 @@ ARCHITECTURE struct OF emu IS
   
   -- OVO -----------------------------------------
   FILE fil : text OPEN write_mode IS "trace_mem.log";
-
-  SIGNAL vcbm1,vcbm2,vcbm3,vcbm4 : uv8;
   
 BEGIN
 
@@ -437,13 +393,12 @@ BEGIN
   swapxy<=status(4); 
 
   ----------------------------------------------------------
-  
   vga_sl<="00";
   vga_f1<='0';
   
   video_arx <= x"04" WHEN status(6)='0' ELSE x"16";
   video_ary <= x"03" WHEN status(6)='0' ELSE x"09";
-
+  
   ----------------------------------------------------------
   sd_sck<='0';
   sd_mosi<='0';
@@ -472,7 +427,6 @@ BEGIN
   uart_txd     <='0';
   uart_dtr     <='0';
   user_out     <=(OTHERS =>'Z');
-  
   
   ----------------------------------------------------------
   ipll : pll
@@ -507,36 +461,35 @@ BEGIN
       req       => req_pvi,
       ack       => ack_pvi,
       wr        => wr,
+      tick      => tick_cpu,
       int       => int_pvi,
       intack    => intack,
       ivec      => ivec,
       vrst      => in_vrst,
-      vid_argb  => in_vid_argb,
-      vid_de    => in_vid_de,
-      vid_hsyn  => in_vid_hsyn,
-      vid_vsyn  => in_vid_vsyn,
-      vid_ce    => in_vid_ce,
+      vid_argb  => in_vga_argb,
+      vid_de    => in_vga_de,
+      vid_hsyn  => in_vga_hsyn,
+      vid_vsyn  => in_vga_vsyn,
+      vid_ce    => in_vga_ce,
       sound     => in_sound,
+      icol      => in_icol,
+      bright    => status(12),
       pot1      => pot1,
       pot2      => pot2,
       np        => ntsc_pal,
-      vcbm1     => vcbm1,
-      vcbm2     => vcbm2,
-      vcbm3     => vcbm3,
-      vcbm4     => vcbm4,
       reset     => reset,
       clk       => clksys,
       reset_na  => reset_na);
 
   dr_in_key<=in_volnoise  WHEN ad_delay(3 DOWNTO 0)=x"0" ELSE -- 1E80
-          in_keypad1_1 WHEN ad_delay(3 DOWNTO 0)=x"8" ELSE -- 1E88
-          in_keypad1_2 WHEN ad_delay(3 DOWNTO 0)=x"9" ELSE -- 1E89
-          in_keypad1_3 WHEN ad_delay(3 DOWNTO 0)=x"A" ELSE -- 1E8A
-          in_keypanel  WHEN ad_delay(3 DOWNTO 0)=x"B" ELSE -- 1E8B
-          in_keypad2_1 WHEN ad_delay(3 DOWNTO 0)=x"C" ELSE -- 1E8C
-          in_keypad2_2 WHEN ad_delay(3 DOWNTO 0)=x"D" ELSE -- 1E8D
-          in_keypad2_3 WHEN ad_delay(3 DOWNTO 0)=x"E" ELSE -- 1E8E
-          x"00";
+             in_keypad1_1 WHEN ad_delay(3 DOWNTO 0)=x"8" ELSE -- 1E88
+             in_keypad1_2 WHEN ad_delay(3 DOWNTO 0)=x"9" ELSE -- 1E89
+             in_keypad1_3 WHEN ad_delay(3 DOWNTO 0)=x"A" ELSE -- 1E8A
+             in_keypanel  WHEN ad_delay(3 DOWNTO 0)=x"B" ELSE -- 1E8B
+             in_keypad2_1 WHEN ad_delay(3 DOWNTO 0)=x"C" ELSE -- 1E8C
+             in_keypad2_2 WHEN ad_delay(3 DOWNTO 0)=x"D" ELSE -- 1E8D
+             in_keypad2_3 WHEN ad_delay(3 DOWNTO 0)=x"E" ELSE -- 1E8E
+             x"00";
 
   in_keypad1_1<=((key_rc & key_bp  & key_pc  & key_minus) OR
                  (joystick_0(11) & joystick_0(8)  & joystick_0(3) & joystick_0(0))) & "0000";
@@ -556,7 +509,68 @@ BEGIN
                  (joystick_0(4) & joystick_0(5)) OR
                  (joystick_1(4) & joystick_1(5))) & "000000";
 
-  in_volnoise <=vol & icol & explo & noise & "000";
+  in_volnoise <=in_vol & in_icol & in_explo & in_noise & in_snd & "00";
+
+  PROCESS(clksys,reset_na) IS
+    VARIABLE a_v,b_v : uv8;
+  BEGIN
+    IF reset_na='0' THEN
+      in_vol<="00";
+      in_icol<='0';
+      in_explo<='0';
+      in_noise<='0';
+      in_snd<='0';
+      lfsr<=to_unsigned(1,15);
+      
+    ELSIF rising_edge(clksys) THEN
+      IF arca='0' AND ad_delay(3 DOWNTO 0)=x"0" AND ad_delay(12)='1' AND
+        ad_delay(11 DOWNTO 8)="1110" AND wr='1' AND tick_cpu='1' THEN
+        in_vol<=dw(7 DOWNTO 6);
+        in_icol<=dw(5);
+        in_explo<=dw(4);
+        in_noise<=dw(3);
+        in_snd<=dw(2);
+      END IF;
+      in_explo2<=in_explo;
+      
+      --------------------------------
+      IF in_explo='1' AND in_explo2='0' THEN
+        explo<=100000;
+      END IF;
+      IF tick_cpu='1' AND explo/=0 THEN
+        explo<=explo-1;
+      END IF;
+      
+      --------------------------------
+      IF tick_cpu='1' THEN
+        divlfsr<=(divlfsr+1) MOD 64;
+        IF divlfsr=0 THEN
+          lfsr<=('0' & lfsr(14 DOWNTO 1)) XOR
+                 (lfsr(0) & "0000000000000" & lfsr(0));
+        END IF;
+      END IF;
+      
+      CASE in_vol IS
+        WHEN "00"   => a_v:=mux(in_sound(7),x"C0",x"3F");
+        WHEN "01"   => a_v:=mux(in_sound(7),x"E0",x"1F");
+        WHEN "10"   => a_v:=mux(in_sound(7),x"F0",x"0F");
+        WHEN OTHERS => a_v:=mux(in_sound(7),x"F8",x"07");
+      END CASE;
+      IF in_snd='0' THEN
+        a_v:=x"00";
+      END IF;
+      b_v:=x"00";
+      IF in_noise='1' THEN
+        b_v:=mux(lfsr(0),x"08",x"f8");
+      END IF;
+      IF explo/=0 THEN
+        b_v:=mux(lfsr(0),x"20",x"E0");
+      END IF;
+      in_sound2<=a_v + b_v;
+      
+    --------------------------------
+    END IF;
+  END PROCESS;
   
   -- Layout, most games :
   
@@ -597,7 +611,7 @@ BEGIN
   --  x01 1001 1xxx xxxx : Video UVI regs : 1980
   --  x01 1010 aaaa aaaa : Video UVI RAM  : 1A00
   --  x10 aaaa aaaa aaaa : Cardridge high : 2000
-
+  
   i_sgs2637: ENTITY work.sgs2637
     PORT MAP (
       ad        => ad,
@@ -606,11 +620,12 @@ BEGIN
       req       => req_uvi,
       ack       => ack_uvi,
       wr        => wr,
-      vid_argb  => ac_vid_argb,
-      vid_de    => ac_vid_de,
-      vid_hsyn  => ac_vid_hsyn,
-      vid_vsyn  => ac_vid_vsyn,
-      vid_ce    => ac_vid_ce,
+      tick      => tick_cpu,
+      vid_argb  => ac_vga_argb,
+      vid_de    => ac_vga_de,
+      vid_hsyn  => ac_vga_hsyn,
+      vid_vsyn  => ac_vga_vsyn,
+      vid_ce    => ac_vga_ce,
       vrst      => ac_vrst,
       sound     => ac_sound,
       pot1      => potr_v,
@@ -742,7 +757,6 @@ BEGIN
   --            '0' AFTER 500 ms;
   
   ----------------------------------------------------------
-  
   dr<=dr_pvi    WHEN arca='0' AND
         ad_delay(12)='1' AND ad_delay(10 DOWNTO 8)="111" ELSE -- PVI Interton
       dr_in_key WHEN arca='0' AND
@@ -756,21 +770,47 @@ BEGIN
         ad_delay(12)='1' AND ad_delay(11 DOWNTO 7)="10010" ELSE -- Keyboard
       dr_uvi    WHEN arca='1' AND
         ad_delay(12)='1' AND ad_delay(11 DOWNTO 8)="1010" ELSE -- UVI Arcadia
-        
+
       dr_rom  -- Cardridge
       ;
   
-  req_pvi<=NOT arca AND req AND tick_cpu WHEN
+  sel_pvi<=NOT arca WHEN
             ad(12)='1' AND ad(10 DOWNTO 8)="111" ELSE '0';
   
-  req_uvi<=arca AND req AND tick_cpu WHEN
+  sel_uvi<=arca WHEN
             (ad(12)='1' AND ad(11 DOWNTO 8)="1000") OR
             (ad(12)='1' AND ad(11 DOWNTO 8)="1010") OR
             (ad(12)='1' AND ad(11 DOWNTO 7)="10011") ELSE '0';
 
+  sel_mem<=NOT sel_pvi AND NOT sel_uvi;
+  
+  req_pvi<=sel_pvi AND req;
+  req_uvi<=sel_uvi AND req;
+  req_mem<=sel_mem AND req;
+  
+  ackp<=tick_cpu AND ack_pvi WHEN sel_pvi='1' ELSE
+        tick_cpu AND ack_uvi WHEN sel_uvi='1' ELSE
+        tick_cpu AND ack_mem;
+
+  PROCESS (clksys) IS
+  BEGIN
+    IF rising_edge(clksys) THEN
+      IF tick_cpu='1' THEN
+        ack_mem_p<=req_mem AND NOT ack_mem;
+        ack_mem_p2<=ack_mem_p AND req_mem;
+      END IF;
+    END IF;
+  END PROCESS;
+  ack_mem<=ack_mem_p2 AND ack_mem_p;
+  
+  --ack<='0';
+
+  ack<=ackp WHEN rising_edge(clksys);
+  
   ad_rom <="000" & ad(11 DOWNTO 0) WHEN arca='1' AND ad(14 DOWNTO 12)="000" ELSE
            "001" & ad(11 DOWNTO 0) WHEN arca='1' AND ad(14 DOWNTO 12)="010" ELSE
             ad;
+  
   -- CPU
   i_sgs2650: ENTITY work.sgs2650
     PORT MAP (
@@ -792,6 +832,9 @@ BEGIN
       reset    => creset,
       clk      => clksys,
       reset_na => reset_na);
+  
+  int<=int_pvi AND NOT arca;
+  ad_delay<=ad WHEN rising_edge(clksys);
   
   ----------------------------------------------------------
 --pragma synthesis_off
@@ -819,136 +862,32 @@ BEGIN
 
 --pragma synthesis_on
   ----------------------------------------------------------
-  
-  ad_delay<=ad WHEN rising_edge(clksys);
-  
-  vga_r_i<=(7=>vid_argb(2) AND vid_argb(3),OTHERS => vid_argb(2));
-  vga_g_i<=(7=>vid_argb(1) AND vid_argb(3),OTHERS => vid_argb(1));
-  vga_b_i<=(7=>vid_argb(0) AND vid_argb(3),OTHERS => vid_argb(0));
-  
-  clk_video<=clksys;
-  ce_pixel<=vid_ce;
-  
   audio_l<=std_logic_vector(sound) & x"00";
   audio_r<=std_logic_vector(sound) & x"00";
   audio_s<='1';
   audio_mix<="11";
-
-  int<=int_pvi AND NOT arca;
+  
+  sound <=mux(arca,ac_sound,in_sound2) WHEN rising_edge(clksys);
   
   ----------------------------------------------------------
   -- MUX VIDEO
+  clk_video<=clksys;
+  ce_pixel<=mux(arca,ac_vga_ce,in_vga_ce) WHEN rising_edge(clksys);
   
-  vid_argb<=mux(arca,ac_vid_argb,in_vid_argb)  WHEN rising_edge(clksys);
-  vid_de  <=mux(arca,ac_vid_de  ,in_vid_de )  WHEN rising_edge(clksys);
-  vid_hsyn<=mux(arca,ac_vid_hsyn,in_vid_hsyn) WHEN rising_edge(clksys);
-  vid_vsyn<=mux(arca,ac_vid_vsyn,in_vid_vsyn) WHEN rising_edge(clksys);
-  vid_ce  <=mux(arca,ac_vid_ce  ,in_vid_ce)   WHEN rising_edge(clksys);
+  vga_de<=mux(arca,ac_vga_de  ,in_vga_de )  WHEN rising_edge(clksys);
+  vga_hs<=mux(arca,ac_vga_hsyn,in_vga_hsyn) WHEN rising_edge(clksys);
+  vga_vs<=mux(arca,ac_vga_vsyn,in_vga_vsyn) WHEN rising_edge(clksys);
   
-  sound <=mux(arca,ac_sound,in_sound) WHEN rising_edge(clksys);
-  ----------------------------------------------------------
-  i_ovo: ENTITY work.ovo
-    PORT MAP (
-      i_r     => vga_r_i,
-      i_g     => vga_g_i,
-      i_b     => vga_b_i,
-      i_hs    => vid_hsyn,
-      i_vs    => vid_vsyn,
-      i_de    => vid_de,
-      i_en    => vid_ce,
-      i_clk   => clksys,
-      o_r     => vga_r_u,
-      o_g     => vga_g_u,
-      o_b     => vga_b_u,
-      o_hs    => vga_hs,
-      o_vs    => vga_vs,
-      o_de    => vga_de,
-      ena     => ovo_ena,
-      in0     => ovo_in0,
-      in1     => ovo_in1);
-
-  vga_r<=std_logic_vector(vga_r_u);
-  vga_g<=std_logic_vector(vga_g_u);
-  vga_b<=std_logic_vector(vga_b_u);
+  vga_argb<=mux(arca,ac_vga_argb,in_vga_argb)  WHEN rising_edge(clksys);
+  vga_r_i<=(7=>vga_argb(2) AND vga_argb(3),OTHERS => vga_argb(2));
+  vga_g_i<=(7=>vga_argb(1) AND vga_argb(3),OTHERS => vga_argb(1));
+  vga_b_i<=(7=>vga_argb(0) AND vga_argb(3),OTHERS => vga_argb(0));
+  vga_r<=std_logic_vector(vga_r_i);
+  vga_g<=std_logic_vector(vga_g_i);
+  vga_b<=std_logic_vector(vga_b_i);
   
-  ovo_in0<=
-    "00" & ad(14 DOWNTO 12) &
-    '0'  & ad(11 DOWNTO 8) &
-    '0'  & ad( 7 DOWNTO 4) &
-    '0'  & ad( 3 DOWNTO 0) &
-    CC(' ') &
-    '0' & unsigned(joystick_0(15 DOWNTO 12)) &
-    '0' & unsigned(joystick_0(11 DOWNTO 8)) &
-    '0' & unsigned(joystick_0(7 DOWNTO 4)) &
-    '0' & unsigned(joystick_0(3 DOWNTO 0)) &
-    CC(' ') &
-    '0' & potl_v(7 DOWNTO 4) &
-    '0' & potl_v(3 DOWNTO 0) &
-    CC(' ') &
-    '0' & potl_h(7 DOWNTO 4) &
-    '0' & potl_h(3 DOWNTO 0) &
-    CC(' ') &
-    "0000" & ps2_key(10) &
-    "0000" & ps2_key(9) &
-    "0000" & ps2_key(8) &
-    '0' & unsigned(ps2_key(7 DOWNTO 4)) &
-    '0' & unsigned(ps2_key(3 DOWNTO 0)) &
-    CC(' ') &
-    '0' & in_keypanel(7 DOWNTO 4) &
-    CC(' ') &
-    '0' & in_keypad1_1(7 DOWNTO 4) &
-    '0' & in_keypad1_2(7 DOWNTO 4) &
-    '0' & in_keypad1_3(7 DOWNTO 4) &
-    '0' & in_keypad2_1(7 DOWNTO 4) &
-    '0' & in_keypad2_2(7 DOWNTO 4) &
-    '0' & in_keypad2_3(7 DOWNTO 4) &
-    CC('.') &
-    CC(' ');
-    
-  ovo_in1<=ovo_in0;
-  --ovo_in1<=
-  --  '0' & vcbm1(7 DOWNTO 4) & 
-  --  '0' & vcbm1(3 DOWNTO 0) & 
-  --  "10000" & 
-  --  '0' & vcbm2(7 DOWNTO 4) & 
-  --  '0' & vcbm2(3 DOWNTO 0) & 
-  --  "10000" &
-  --  '0' & vcbm3(7 DOWNTO 4) & 
-  --  '0' & vcbm3(3 DOWNTO 0) & 
-  --  "10000" &
-  --  '0' & vcbm4(7 DOWNTO 4) & 
-  --  '0' & vcbm4(3 DOWNTO 0) & 
-  --  "10000" &
-  --  '0' & vcbm1(7 DOWNTO 4) & 
-  --  '0' & vcbm1(3 DOWNTO 0) & 
-  --  "10000" & 
-  --  '0' & vcbm2(7 DOWNTO 4) & 
-  --  '0' & vcbm2(3 DOWNTO 0) & 
-  --  "10000" &
-  --  '0' & vcbm3(7 DOWNTO 4) & 
-  --  '0' & vcbm3(3 DOWNTO 0) & 
-  --  "10000" &
-  --  '0' & vcbm4(7 DOWNTO 4) & 
-  --  '0' & vcbm4(3 DOWNTO 0) & 
-  --  "10000" &
-    
-    
-    
-  --  CC(' ') &
-  --  '0' & in_keypanel(7 DOWNTO 4) &
-  --  CC(' ') &
-  --  '0' & in_keypad1_1(7 DOWNTO 4) &
-  --  '0' & in_keypad1_2(7 DOWNTO 4) &
-  --  '0' & in_keypad1_3(7 DOWNTO 4) &
-  --  '0' & in_keypad2_1(7 DOWNTO 4) &
-  --  '0' & in_keypad2_2(7 DOWNTO 4) &
-  --  '0' & in_keypad2_3(7 DOWNTO 4) &
-  --  CC('.') &
-  --  CC(' ');
-  
-  ovo_ena<=status(2); -- Overlay
-  led_power<='1' & vid_vsyn;
-  led_disk <='1' & vid_hsyn;
+  led_power<="00";
+  led_disk <="00";
   
   ----------------------------------------------------------
   -- ROM / RAM
@@ -977,7 +916,7 @@ BEGIN
     END IF;
   END PROCESS icart2;
   
-  PROCESS(clksys,reset_na) IS
+  PROCESS(clksys) IS
   BEGIN
     IF rising_edge(clksys) THEN
       w_wr<=ioctl_download AND ioctl_wr;
@@ -987,7 +926,7 @@ BEGIN
   END PROCESS;
   
   ioctl_wait<='0';
-
+  
   ----------------------------------------------------------
   -- CPU CLK
   DivCLK:PROCESS (clksys,reset_na) IS
@@ -1005,9 +944,7 @@ BEGIN
     END IF;
   END PROCESS DivCLK;
   
-  ack<=tick_cpu;
-  
-  reset_na<=NOT reset OR pll_locked;
+  reset_na<=NOT reset OR pll_locked OR NOT ioctl_download;
   creset<=ioctl_download;
   
 END struct;

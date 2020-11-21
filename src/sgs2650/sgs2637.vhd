@@ -81,6 +81,7 @@ ENTITY sgs2637 IS
     req  : IN  std_logic;
     ack  : OUT std_logic;
     wr   : IN  std_logic;
+    tick : IN  std_logic;
     
     vid_argb : OUT uv4;         -- I | R | G | B
     vid_de   : OUT std_logic;
@@ -317,7 +318,7 @@ BEGIN
   
   ack<='1';
 
-  wreq<=wr AND req;
+  wreq<=wr AND req AND tick;
   adi <="0" & ad(10 DOWNTO 0);
 
   dr<=dr_reg WHEN drreg_sel='1' ELSE dr_mem;
@@ -374,7 +375,7 @@ BEGIN
         ccoll<=ccoll AND NOT (o4c_coll & o3c_coll & o2c_coll & o1c_coll);
       END IF;
       
-      IF adi=x"1FC" AND req='1' THEN
+      IF adi=x"1FC" AND req='1' AND tick='1' THEN
         ccoll_pre<='1';
       END IF;
       
@@ -391,7 +392,7 @@ BEGIN
                               o14_coll & o13_coll & o12_coll);
       END IF;
       
-      IF adi=x"1FD" AND req='1' THEN
+      IF adi=x"1FD" AND req='1' AND tick='1' THEN
         ocoll_pre<='1';
       END IF;
       

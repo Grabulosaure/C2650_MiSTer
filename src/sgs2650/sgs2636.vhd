@@ -74,16 +74,6 @@
 -- Horizontal : 32 .. 227
 -- Vertical   : 20 .. 252
 
--- Input clock shall be 8x the pixel clock
---  0 : Clear
---  1 : Vertical   background
---  2 : Horizontal background
---  3 : Object 1
---  4 : Object 2
---  5 : Object 3
---  6 : Object 4
---  7 : Score
-
 ----------------------------------------------------------------
 -- Zone affichage : Blocs 8x20.   16 x 10 blocs = 128 x 200 pixels
 -- Zone fond      : H= 32..159  V=20..219
@@ -136,6 +126,7 @@ ENTITY sgs2636 IS
     req  : IN  std_logic;
     ack  : OUT std_logic;
     wr   : IN  std_logic;
+    tick : IN  std_logic;
     
     int    : OUT std_logic;
     intack : IN  std_logic;
@@ -147,21 +138,18 @@ ENTITY sgs2636 IS
     vid_hsyn  : OUT std_logic;
     vid_vsyn  : OUT std_logic;
     vid_ce    : OUT std_logic;
-
+    
     sound    : OUT uv8;
-
-    pot1     : IN uv8;
-    pot2     : IN uv8;
+    icol     : IN  std_logic;
+    bright   : IN  std_logic;
+    pot1     : IN  uv8;
+    pot2     : IN  uv8;
     
-    np       : IN std_logic; -- 0=NTSC 60Hz, 1=PAL 50Hz
-    vcbm1    : OUT uv8;
-    vcbm2    : OUT uv8;
-    vcbm3    : OUT uv8;
-    vcbm4    : OUT uv8;
+    np       : IN  std_logic; -- 0=NTSC 60Hz, 1=PAL 50Hz
     
-    reset    : IN std_logic;
-    clk      : IN std_logic; -- 8x Pixel clock
-    reset_na : IN std_logic
+    reset    : IN  std_logic;
+    clk      : IN  std_logic; -- 8x Pixel clock
+    reset_na : IN  std_logic
     );
 END ENTITY sgs2636;
 
@@ -173,9 +161,8 @@ ARCHITECTURE rtl OF sgs2636 IS
   ATTRIBUTE ramstyle : string;
   ATTRIBUTE ramstyle OF mem : SIGNAL IS "no_rw_check";
 
-  SIGNAL bg_dr : uv8;
-  SIGNAL mad,mdr,mdrp : uv8;
-  SIGNAL xxx_o1_h : std_logic;
+  SIGNAL bgv0_dr,bgv1_dr,bgh_dr : uv8;
+  SIGNAL mad,mdr : uv8;
   SIGNAL drreg_sel : std_logic;
   SIGNAL dr_mem,dr_reg : uv8;
   
@@ -183,7 +170,6 @@ ARCHITECTURE rtl OF sgs2636 IS
   SIGNAL sval12,sval34,bgcoll,ocoll : uv8 :=x"00";
   SIGNAL clr_coll,clr_ocoll : std_logic;
   SIGNAL pre_coll,pre_ocoll : std_logic;
-  SIGNAL o1_hit,o2_hit,o3_hit,o4_hit,bg_hit : std_logic;
   ALIAS bg_ena  : std_logic IS bgcolour(3); -- Background Enable
   ALIAS bg_colour : uv3 IS bgcolour(6 DOWNTO 4); -- Background colour
   ALIAS sc_colour : uv3 IS bgcolour(2 DOWNTO 0); -- Screen colour
@@ -202,39 +188,39 @@ ARCHITECTURE rtl OF sgs2636 IS
   ALIAS s3_val  : uv4 IS sval34(7 DOWNTO 4); -- Score value 3
   ALIAS s4_val  : uv4 IS sval34(3 DOWNTO 0); -- Score value 4
 
-  SIGNAL o1_hc,o1_hcb,o1_vc,o1_vcm,o1_vcb,o1_vcbm : uv8 :=x"00";
-  SIGNAL o2_hc,o2_hcb,o2_vc,o2_vcm,o2_vcb,o2_vcbm : uv8 :=x"00";
-  SIGNAL o3_hc,o3_hcb,o3_vc,o3_vcm,o3_vcb,o3_vcbm : uv8 :=x"00";
-  SIGNAL o4_hc,o4_hcb,o4_vc,o4_vcm,o4_vcb,o4_vcbm : uv8 :=x"00";
-
-  SIGNAL o12_coll,o13_coll,o23_coll,o14_coll,o34_coll,o24_coll : std_logic;
-  SIGNAL o1b_coll,o2b_coll,o3b_coll,o4b_coll : std_logic;
+  SIGNAL o1_hc,o1_hcb,o1_vc,o1_vcb : uv8 :=x"00";
+  SIGNAL o2_hc,o2_hcb,o2_vc,o2_vcb : uv8 :=x"00";
+  SIGNAL o3_hc,o3_hcb,o3_vc,o3_vcb : uv8 :=x"00";
+  SIGNAL o4_hc,o4_hcb,o4_vc,o4_vcb : uv8 :=x"00";
+  SIGNAL o1_vcm,o1_vcbm : uv8 :=x"00";
+  SIGNAL o2_vcm,o2_vcbm : uv8 :=x"00";
+  SIGNAL o3_vcm,o3_vcbm : uv8 :=x"00";
+  SIGNAL o4_vcm,o4_vcbm : uv8 :=x"00";
+  SIGNAL o1_hcm,o2_hcm,o3_hcm,o4_hcm : uint9;
+  SIGNAL o1_vhit,o2_vhit,o3_vhit,o4_vhit : boolean;
+  SIGNAL o1_hit,o2_hit,o3_hit,o4_hit : std_logic;
+  
   SIGNAL o12_cola,o13_cola,o23_cola,o14_cola,o34_cola,o24_cola : std_logic;
   SIGNAL o1b_cola,o2b_cola,o3b_cola,o4b_cola : std_logic;
   SIGNAL o1_mdr,o2_mdr,o3_mdr,o4_mdr : uv8;
   SIGNAL o1_cplt,o2_cplt,o3_cplt,o4_cplt : std_logic;
-  SIGNAL o1_cpla,o2_cpla,o3_cpla,o4_cpla : std_logic;
-  SIGNAL o1_sizem,o2_sizem,o3_sizem,o4_sizem : uv2;
   
   SIGNAL o1_diff,o2_diff,o3_diff,o4_diff : uint9 :=0;
-  SIGNAL o1_diff_clr,o2_diff_clr,o3_diff_clr,o4_diff_clr : std_logic;
-  SIGNAL hpos,htotal,hsyncstart,hsyncend,hdisp : uint9;
+  SIGNAL hpos,htotal,hsyncstart,hsyncend,hdispstart,hdispend : uint9;
   SIGNAL vpos,vtotal,vsyncstart,vsyncend,vdisp : uint9;
-  SIGNAL hpix : uint9;
   SIGNAL vbar   : uint5; -- Vertical bar number 0 .. 19
   SIGNAL vpos20 : uint5; -- Line number within bar 0..19
-
-  SIGNAL divi : natural RANGE 0 TO 8-1;
-  SIGNAL tick_divi : std_logic;
   
   SIGNAL hpulse,sound_i,int_i : std_logic;
   SIGNAL snd_cpt : uv8;
-  SIGNAL o1_inter,o2_inter,o3_inter,o4_inter : uint8;
   SIGNAL o1_post ,o2_post ,o3_post ,o4_post  : std_logic;
-  SIGNAL vrst_i,vrst_pre : std_logic;
+  SIGNAL vrst_i,vrst_pre,hrst : std_logic;
 
   SIGNAL cyc : natural RANGE 0 TO 7;
-  SIGNAL col_argb : uv4;
+  SIGNAL reqd : std_logic;
+
+  CONSTANT HDELAY : uint8 := 82;
+  CONSTANT VDELAY : uint8 := 38;
   
   CONSTANT segments : arr_uv8(0 TO 15):=(
 --   abcdefgh
@@ -301,44 +287,13 @@ ARCHITECTURE rtl OF sgs2636 IS
   END FUNCTION;
   
   ------------------------------------------------
-  FUNCTION objfirst(
-    vpos : uint9;
-    vc   : uv8;
-    size : uv2) RETURN boolean IS
-    VARIABLE ivc : natural := to_integer(vc);
-  BEGIN
-    CASE size IS
-      WHEN "00" => -- Scale x1
-        RETURN true;
-      WHEN "01" => -- Scale x2
-        RETURN ((vpos - ivc) MOD 2)=0;
-      WHEN "10" => -- Scale x4
-        RETURN ((vpos - ivc) MOD 4)=0;
-      WHEN OTHERS => -- Scale x8
-        RETURN ((vpos - ivc) MOD 8)=0;
-    END CASE;
-  END FUNCTION;
-  ------------------------------------------------
-  FUNCTION objtop(
-    vpos : uint9;
-    vc   : uv8;
-    size : uv2) RETURN boolean IS
-    VARIABLE ivc : natural := to_integer(vc);
-  BEGIN
-    RETURN vpos = ivc;
-  END FUNCTION;
-  ------------------------------------------------
   -- Bottom line of objects
   FUNCTION objlast(
     vpos : uint9; -- Spot vertical   position
-    hpos : uint9;
     vc   : uv8; -- Vertical   coordinate object
     size : uv2) RETURN boolean IS -- Object size
     VARIABLE ivc : uint8 := to_integer(vc);
   BEGIN
-    IF hpos/=209 THEN
-      RETURN false;
-    END IF;
     CASE size IS
       WHEN "00" => -- Scale x1
         RETURN vpos>=ivc AND (vpos-ivc)=9;
@@ -355,52 +310,58 @@ ARCHITECTURE rtl OF sgs2636 IS
   -- Bit selection in object pattern
   FUNCTION objbit(
     hpos : uint9; -- Spot horizontal position
-    hc   : uv8; -- Horizontal coordinate object
+    hc   : uint9; -- Horizontal coordinate object
     size : uv2) RETURN natural IS -- Object size
     VARIABLE a : uint3;
-    VARIABLE ihc : uint8 :=to_integer(hc);
   BEGIN
     CASE size IS
       WHEN "00" => -- Scale x1
-        a:=(hpos-ihc) MOD 8;
+        a:=(hpos-hc) MOD 8;
       WHEN "01" => -- Scale x2
-        a:=((hpos-ihc)/2) MOD 8;
+        a:=((hpos-hc)/2) MOD 8;
       WHEN "10" => -- Scale x4
-        a:=((hpos-ihc)/4) MOD 8;
+        a:=((hpos-hc)/4) MOD 8;
       WHEN OTHERS => -- Scale x8
-        a:=((hpos-ihc)/8) MOD 8;
+        a:=((hpos-hc)/8) MOD 8;
     END CASE;
     RETURN 7-a;
   END FUNCTION;
   
   ------------------------------------------------
   -- Object hit
-  FUNCTION objhit(
-    hpos : uint9; -- Spot horizontal position
+  FUNCTION objvhit(
     vpos : uint9; -- Spot vertical   position
-    hc   : uv8; -- Horizontal coordinate object
     vc   : uv8; -- Vertical   coordinate object
     size : uv2) RETURN boolean IS -- Object size
     VARIABLE ivc : uint8 := to_integer(vc);
-    VARIABLE ihc : uint8 := to_integer(hc);
   BEGIN
-    IF hc > 227 THEN
-      RETURN false;
-    --IF hpos > 227 OR vpos > 252 THEN
-    --  RETURN false;
-     
-  ELSE
     CASE size IS
       WHEN "00" => -- Scale x1
-        RETURN vpos>=ivc AND (vpos-ivc)<10 AND hpos>=ihc AND (hpos-ihc)<8;
+        RETURN vpos>=ivc AND (vpos-ivc)<10;
       WHEN "01" => -- Scale x2
-        RETURN vpos>=ivc AND (vpos-ivc)<20 AND hpos>=ihc AND (hpos-ihc)<16;
+        RETURN vpos>=ivc AND (vpos-ivc)<20;
       WHEN "10" => -- Scale x4
-        RETURN vpos>=ivc AND (vpos-ivc)<40 AND hpos>=ihc AND (hpos-ihc)<32;
+        RETURN vpos>=ivc AND (vpos-ivc)<40;
       WHEN OTHERS => -- Scale x8
-        RETURN vpos>=ivc AND (vpos-ivc)<80 AND hpos>=ihc AND (hpos-ihc)<64;
+        RETURN vpos>=ivc AND (vpos-ivc)<80;
     END CASE;
-    END IF;
+  END FUNCTION;
+  
+  FUNCTION objhhit(
+    hpos : uint9; -- Spot horizontal position
+    hc   : uint9; -- Horizontal coordinate object
+    size : uv2) RETURN boolean IS -- Object size
+  BEGIN
+    CASE size IS
+      WHEN "00" => -- Scale x1
+        RETURN hpos>=hc AND (hpos-hc)<8;
+      WHEN "01" => -- Scale x2
+        RETURN hpos>=hc AND (hpos-hc)<16;
+      WHEN "10" => -- Scale x4
+        RETURN hpos>=hc AND (hpos-hc)<32;
+      WHEN OTHERS => -- Scale x8
+        RETURN hpos>=hc AND (hpos-hc)<64;
+    END CASE;
   END FUNCTION;
   
   ------------------------------------------------
@@ -413,7 +374,7 @@ ARCHITECTURE rtl OF sgs2636 IS
     VARIABLE a : std_logic;
     VARIABLE r : boolean;
   BEGIN
-    b:=(hpos-32) MOD 8;
+    b:=(hpos-94+16) MOD 8;
     
     -- 0 : Extend bars of set 1 to 8 clocks
     -- 1 : Extend top 9 lines of set 2 to 8 clocks
@@ -474,50 +435,51 @@ ARCHITECTURE rtl OF sgs2636 IS
     VARIABLE val : uv4;
     VARIABLE a : boolean;
     VARIABLE h,v : uint8;
+    CONSTANT OFF : natural :=106;
   BEGIN
     -- pos : 0= HIGH : 20V...39V 1= LOW = 200v .. 219V
-    IF s_pos='0' AND vpos>=20 AND vpos<40 THEN
-      v:=vpos-20;
+    IF s_pos='0' AND vpos>=20+2 AND vpos<40+2 THEN
+      v:=vpos-20-2;
       a:=true;
-    ELSIF s_pos='1' AND vpos>=200 AND vpos<220 THEN
-      v:=vpos-200;
+    ELSIF s_pos='1' AND vpos>=200+2 AND vpos<220+2 THEN
+      v:=vpos-200-2;
       a:=true;
     ELSE
       v:=0;
       a:=false;
     END IF;
-
+    
     IF s_form='1' THEN
-      IF hpos>=32+28 AND hpos<32+28+12 THEN
+      IF hpos>=OFF AND hpos<OFF+12 THEN
         d:=0;
-        h:=hpos-28-32;
-      ELSIF hpos>=32+44 AND hpos<32+44+12 THEN
+        h:=hpos-OFF;
+      ELSIF hpos>=OFF+16 AND hpos<OFF+16+12 THEN
         d:=1;
-        h:=hpos-44-32;
-      ELSIF hpos>=32+60 AND hpos<32+60+12 THEN
+        h:=hpos-OFF-16;
+      ELSIF hpos>=OFF+32 AND hpos<OFF+32+12 THEN
         d:=2;
-        h:=hpos-60-32;
-      ELSIF hpos>=32+76 AND hpos<32+76+12 THEN
+        h:=hpos-OFF-32;
+      ELSIF hpos>=OFF+48 AND hpos<OFF+48+12 THEN
         d:=3;
-        h:=hpos-76-32;
+        h:=hpos-OFF-48;
       ELSE
         a:=false;
         d:=0;
         h:=0;
       END IF;
     ELSE
-      IF hpos>=32+28 AND hpos<32+28+12 THEN
+      IF hpos>=OFF AND hpos<OFF+12 THEN
         d:=0;
-        h:=hpos-28-32;
-      ELSIF hpos>=32+44 AND hpos<32+44+12 THEN
+        h:=hpos-OFF;
+      ELSIF hpos>=OFF+16 AND hpos<OFF+16+12 THEN
         d:=1;
-        h:=hpos-44-32;
-      ELSIF hpos>=32+76 AND hpos<32+76+12 THEN
+        h:=hpos-OFF-16;
+      ELSIF hpos>=OFF+48 AND hpos<OFF+48+12 THEN
         d:=2;
-        h:=hpos-76-32;
-      ELSIF hpos>=32+92 AND hpos<32+92+12 THEN
+        h:=hpos-OFF-48;
+      ELSIF hpos>=OFF+64 AND hpos<OFF+64+12 THEN
         d:=3;
-        h:=hpos-92-32;
+        h:=hpos-OFF-64;
       ELSE
         a:=false;
         d:=0;
@@ -549,20 +511,25 @@ ARCHITECTURE rtl OF sgs2636 IS
   END FUNCTION;
   
   ------------------------------------------------
-  FUNCTION orcol(hit : std_logic;
-                 p   : unsigned(3 DOWNTO 0);
-                 n   : unsigned(3 DOWNTO 0)) RETURN unsigned IS
+  FUNCTION colo(c      : unsigned(2 DOWNTO 0);
+                obj    : std_logic;
+                icol   : std_logic;
+                bright : std_logic) RETURN unsigned IS
   BEGIN
-    IF hit='1' THEN
-      RETURN p OR n;
+    IF obj='0' AND icol='0' THEN
+      RETURN '0' & c;
+    ELSIF obj='1' THEN
+      RETURN bright & NOT c;
     ELSE
-      RETURN n;
+      RETURN '0' & NOT c;
     END IF;
   END FUNCTION;
   
+  ------------------------------------------------
+  
 BEGIN
 
-  wreq<=wr AND req;
+  wreq<=wr AND req AND tick;
   
   dr<=dr_reg WHEN drreg_sel='1' ELSE dr_mem;
   
@@ -571,6 +538,23 @@ BEGIN
     IF reset_na='0' THEN
       pre_ocoll<='0';
       pre_coll<='0';
+      
+      osize   <=x"FF";
+      ocol12  <=x"FF";
+      ocol34  <=x"FF";
+      spos    <=x"FF";
+      bgcolour<=x"FF";
+      sval12  <=x"FF";
+      sval34  <=x"FF";
+      
+      o1_hc <=x"00";  o1_hcb<=x"00";
+      o1_vc <=x"00";  o1_vcb<=x"00";
+      o2_hc <=x"00";  o2_hcb<=x"00";
+      o2_vc <=x"00";  o2_vcb<=x"00";
+      o3_hc <=x"00";  o3_hcb<=x"00";
+      o3_vc <=x"00";  o3_vcb<=x"00";
+      o4_hc <=x"00";  o4_hcb<=x"00";
+      o4_vc <=x"00";  o4_vcb<=x"00";
       
     ELSIF rising_edge(clk) THEN
       --------------------------------------------
@@ -586,16 +570,16 @@ BEGIN
       IF ad(10 DOWNTO 0)>="111" & x"C0" THEN
         drreg_sel<='1';
         CASE ad(3 DOWNTO 0) IS
-          WHEN x"0" => dr_reg<=osize;  IF wreq='1' THEN  osize <=dw; END IF;
-          WHEN x"1" => dr_reg<=ocol12; IF wreq='1' THEN  ocol12<=dw; END IF;
-          WHEN x"2" => dr_reg<=ocol34; IF wreq='1' THEN  ocol34<=dw; END IF;
-          WHEN x"3" => dr_reg<=spos;   IF wreq='1' THEN  spos  <=dw; END IF;
+          WHEN x"0" => dr_reg<=x"00"; IF wreq='1' THEN  osize <=dw; END IF;
+          WHEN x"1" => dr_reg<=x"00"; IF wreq='1' THEN  ocol12<=dw; END IF;
+          WHEN x"2" => dr_reg<=x"00"; IF wreq='1' THEN  ocol34<=dw; END IF;
+          WHEN x"3" => dr_reg<=x"00"; IF wreq='1' THEN  spos  <=dw; END IF;
           WHEN x"4" => dr_reg<=x"00"; -- <undef>
           WHEN x"5" => dr_reg<=x"00"; -- <undef>
-          WHEN x"6" => dr_reg<=bgcolour; IF wreq='1' THEN bgcolour<=dw; END IF;
-          WHEN x"7" => dr_reg<=sper;   IF wreq='1' THEN sper   <=dw; END IF;
-          WHEN x"8" => dr_reg<=sval12; IF wreq='1' THEN sval12 <=dw; END IF;
-          WHEN x"9" => dr_reg<=sval34; IF wreq='1' THEN sval34 <=dw; END IF;
+          WHEN x"6" => dr_reg<=x"00"; IF wreq='1' THEN bgcolour<=dw; END IF;
+          WHEN x"7" => dr_reg<=x"00"; IF wreq='1' THEN sper   <=dw; END IF;
+          WHEN x"8" => dr_reg<=x"00"; IF wreq='1' THEN sval12 <=dw; END IF;
+          WHEN x"9" => dr_reg<=x"00"; IF wreq='1' THEN sval34 <=dw; END IF;
           WHEN x"A" => dr_reg<=bgcoll;
           WHEN x"B" => dr_reg<=ocoll;
           WHEN x"C" => dr_reg<=pot1;
@@ -604,11 +588,7 @@ BEGIN
           WHEN x"F" => dr_reg<=x"00"; -- <undef>
           WHEN OTHERS => NULL;
         END CASE;
-
-        ocol12(7 DOWNTO 6)<="00";
-        ocol34(7 DOWNTO 6)<="00";
-        spos  (7 DOWNTO 2)<="000000";
-        bgcolour (7)<='0';
+        
       ELSE
         IF wreq='1' THEN
           CASE ad(11 DOWNTO 0) IS
@@ -635,10 +615,11 @@ BEGIN
       
       --------------------------------------------
       -- Clear collisions after register read
-      bgcoll<=bgcoll OR (o1b_coll & o2b_coll & o3b_coll & o4b_coll &
+      bgcoll<=bgcoll OR (o1b_cola & o2b_cola & o3b_cola & o4b_cola &
                           o1_cplt & o2_cplt & o3_cplt & o4_cplt);
       
-      IF (ad(11 DOWNTO 0)=x"FCA" OR ad(11 DOWNTO 0)=x"7CA") AND req='1' THEN
+      IF (ad(11 DOWNTO 0)=x"FCA" OR ad(11 DOWNTO 0)=x"7CA") AND req='1' AND
+        tick='1' THEN
         pre_coll<='1';
       END IF;
       
@@ -653,11 +634,12 @@ BEGIN
       END IF;
       
       --------------------------------------------
-      ocoll<=ocoll OR ("00" & o12_coll & o13_coll &
-                       o14_coll & o23_coll & o24_coll & o34_coll);
+      ocoll<=ocoll OR ("00" & o12_cola & o13_cola &
+                       o14_cola & o23_cola & o24_cola & o34_cola);
       ocoll(6)<=ocoll(6) OR (vrst_i AND NOT vrst_pre);
       
-      IF (ad(11 DOWNTO 0)=x"FCB" OR ad(11 DOWNTO 0)=x"7CB") AND req='1' THEN
+      IF (ad(11 DOWNTO 0)=x"FCB" OR ad(11 DOWNTO 0)=x"7CB") AND req='1' AND
+        tick='1' THEN
         pre_ocoll<='1';
       END IF;
       
@@ -676,8 +658,8 @@ BEGIN
     END IF;
     
   END PROCESS Regs;
-
-
+  
+  ------------------------------------------------------------------------------
   Madar:PROCESS(clk) IS
   BEGIN
     IF rising_edge(clk) THEN
@@ -686,60 +668,12 @@ BEGIN
   END PROCESS Madar;
   
   ------------------------------------------------------------------------------
-  MadMad:PROCESS(cyc,hpix,vbar,vpos,
-                 o1_vc,o1_vcbm,o1_diff,o1_size,o1_post,
-                 o2_vc,o2_vcbm,o2_diff,o2_size,o2_post,
-                 o3_vc,o3_vcbm,o3_diff,o3_size,o3_post,
-                 o4_vc,o4_vcbm,o4_diff,o4_size,o4_post) IS
-  BEGIN
-      CASE cyc IS
-        WHEN 0 =>
-          -- Vertical   background
-          mad<=to_unsigned((hpix / 8 + vbar * 2),8) + x"80";
-          
-        WHEN 1 => 
-          -- Horizontal background
-          mad<=to_unsigned(vbar / 4,8) + x"A8";
-          
-        WHEN 2 => -- Object 1
-          IF o1_post='0' THEN
-            mad<=objadrs(vpos+1,o1_vc+1,o1_size,x"00");
-          ELSE
-            mad<=objadrs(o1_diff,o1_vcbm,o1_size,x"00");
-          END IF;
-          
-        WHEN 3 => -- Object 2
-          IF o2_post='0' THEN
-            mad<=objadrs(vpos+1,o2_vc+1,o2_size,x"10");
-          ELSE
-            mad<=objadrs(o2_diff,o2_vcbm,o2_size,x"10");
-          END IF;
-          
-        WHEN 4 => -- Object 3
-          IF o3_post='0' THEN
-            mad<=objadrs(vpos+1,o3_vc+1,o3_size,x"20");
-          ELSE
-            mad<=objadrs(o3_diff,o3_vcbm,o3_size,x"20");
-          END IF;
-          
-        WHEN 5 => -- Object 4
-          IF o4_post='0' THEN
-            mad<=objadrs(vpos+1,o4_vc+1,o4_size,x"40");
-          ELSE
-            mad<=objadrs(o4_diff,o4_vcbm,o4_size,x"40");
-          END IF;
-          
-        WHEN 6 | 7 => -- Score
-          NULL;
-      END CASE;
-
-  END PROCESS MadMad;
-  
-  ------------------------------------------------------------------------------
   Vid:PROCESS (clk,reset_na) IS
     VARIABLE b,h : boolean;
     VARIABLE i : natural RANGE 0 TO 7;
-    VARIABLE hen_v : std_logic;
+    VARIABLE hpix_v : uint9;
+    VARIABLE o1_hit_v,o2_hit_v,o3_hit_v,o4_hit_v,bg_hit_v : std_logic;
+    VARIABLE col_v,cob_v : uv4;
   BEGIN
     IF reset_na='0' THEN
       int_i<='0';
@@ -752,366 +686,355 @@ BEGIN
       -- VRST  : 1 ... 43
       -- VSYNC : 12 ... 14
       -- TOTAL : 312
-      vdisp     <=268;
-      vsyncstart<=301;
-      vsyncend  <=303;
-      vtotal    <=312;
+      
+      -- HTOTAL            = 227 cycles
+      -- HRST              = cycles 6 à 48 inclus
+      -- HS                = cycles 11 à 27 inclus
+      -- Position 0 objets = cycle 39+6 = 45
+      -- Wait states       = cycles 6 à 48 inclus
+      
+      -- (Si front montant HRST cycle 0, si position objet HC=0,
+      -- l’objet commence à partir de 0x27=39)
+      
+      --si VCPT=0x22 avec VRST actif jusqu'à 0x1F => position objet VC=0
+      --Si HCPT=0x39 => position objet HC=0
 
-      -- HRST : 6 ... 49
-      -- HSYNC : 11 ... 28
-      -- TOTAL : 227
-      hdisp     <=184;
-      hsyncstart<=195;
-      hsyncend  <=212;
-      htotal    <=227;
+      -- Suppression CYC :
+      -- - Empile 4 objets + fond + score en 1 cycle
+      -- - Pendant les 40 cycles de blanking, traite séquentiellement
+      --   lecture objets, début/fin de ligne
       
       --------------------------------------------
       -- Collisions pulses
-      o12_coll<='0';
-      o23_coll<='0';
-      o34_coll<='0';
-      o13_coll<='0';
-      o14_coll<='0';
-      o24_coll<='0';
-      o1b_coll<='0';
-      o2b_coll<='0';
-      o3b_coll<='0';
-      o4b_coll<='0';
-      
       o1_cplt<='0';
       o2_cplt<='0';
       o3_cplt<='0';
       o4_cplt<='0';
-
       hpulse<='0';
+      o1_hit_v:='0';
+      o2_hit_v:='0';
+      o3_hit_v:='0';
+      o4_hit_v:='0';
+      bg_hit_v:='0';
+      
+      hpix_v:=((hpos-78) MOD 128)/8;
       --------------------------------------------
       cyc<=(cyc+1) MOD 8;
-
-      hen_v:=to_std_logic(vpos<=252);
-      h:=false;
       
-      CASE cyc IS
-        WHEN 0 => -- Clear
-          IF hpos<htotal-1 THEN
-            hpos<=hpos+1;
+      -- EE
+      IF cyc=0 THEN
+
+        IF hpos<htotal-1 THEN
+          hpos<=hpos+1;
+        ELSE
+          hpos<=0;
+          hpulse<='1';
+          IF vpos<vtotal-1 THEN
+            vpos<=vpos+1;
           ELSE
-            hpos<=0;
-           
-            IF vpos<vtotal-1 THEN
-              vpos<=vpos+1;
+            vpos<=0;  
+          END IF;
+          IF vpos<22 THEN
+            --valt<='0';
+            vpos20<=0;
+            vbar<=0;
+          ELSE
+            IF vpos20<19 THEN
+              vpos20<=vpos20+1;
             ELSE
-              vpos<=0;
+              vpos20<=0;
+            END IF;
+            IF vpos20=1 OR vpos20=19 THEN
+              vbar<=vbar+1;
+            END IF;
+          END IF;
+          
+        END IF;
+        
+        CASE hpos IS
+          
+          WHEN 2 => --
+
+          WHEN 4 => -- Vertical background : Set address
+            mad<=to_unsigned(vbar * 2,8) + x"80";
+            
+          WHEN 6 => -- Vertical background : Read content
+            bgv0_dr<=mdr;
+            
+          WHEN 8 => -- Vertical background : Set address
+            mad<=to_unsigned(vbar * 2,8) + x"81";
+            
+          WHEN 10 => -- Vertical background : Read content
+            bgv1_dr<=mdr;
+            
+          WHEN 12 => -- Horizontal background : Set address
+            mad<=to_unsigned(vbar / 4,8) + x"A8";
+
+          WHEN 14 => -- Horizontal background : Read content
+            bgh_dr<=mdr;
+            
+          WHEN 16 => -- Object 1 : Set address
+            IF o1_post='0' THEN
+              mad<=objadrs(vpos,o1_vcm+2,o1_size,x"00");
+            ELSE
+              mad<=objadrs(o1_diff,o1_vcbm,o1_size,x"00");
+            END IF;
+            
+          WHEN 18 => -- Object 1 : Read
+            o1_mdr<=mdr;
+            o1_diff<=o1_diff+1;
+            IF o1_post='0' THEN
+              o1_vhit<=objvhit(vpos,o1_vcm+2,o1_size);
+              IF objlast(vpos,o1_vcm+2,o1_size) THEN
+                o1_post<='1';
+                o1_cplt<='1';
+                o1_diff<=0;
+                o1_vcbm<=o1_vcb+1;
+              END IF;
+              o1_hcm<=to_integer(o1_hc) + 47;
+            ELSE
+              o1_vhit<=objvhit(o1_diff,o1_vcbm,o1_size);
+              IF objlast(o1_diff,o1_vcbm,o1_size) THEN
+                o1_cplt<='1';
+                o1_diff<=0;
+                o1_vcbm<=o1_vcb+1;
+              END IF;
+              o1_hcm<=to_integer(o1_hcb) + 47;
+            END IF;
+            
+          WHEN 24 => -- Object 2 : Set address
+            IF o2_post='0' THEN
+              mad<=objadrs(vpos,o2_vcm+2,o2_size,x"10");
+            ELSE
+              mad<=objadrs(o2_diff,o2_vcbm,o2_size,x"10");
+            END IF;
+            
+          WHEN 26 => -- Object 2 : Read
+            o2_mdr<=mdr;
+            o2_diff<=o2_diff+1;
+            IF o2_post='0' THEN
+              o2_vhit<=objvhit(vpos,o2_vcm+2,o2_size);
+              IF objlast(vpos,o2_vcm+2,o2_size) THEN
+                o2_post<='1';
+                o2_cplt<='1';
+                o2_diff<=0;
+                o2_vcbm<=o2_vcb+1;
+              END IF;
+              o2_hcm<=to_integer(o2_hc) + 47;
+            ELSE
+              o2_vhit<=objvhit(o2_diff,o2_vcbm,o2_size);
+              IF objlast(o2_diff,o2_vcbm,o2_size) THEN
+                o2_cplt<='1';
+                o2_diff<=0;
+                o2_vcbm<=o2_vcb+1;
+              END IF;
+              o2_hcm<=to_integer(o2_hcb) + 47;
+            END IF;
+            
+          WHEN 32 => -- Object 3 : Set address
+            IF o3_post='0' THEN
+              mad<=objadrs(vpos,o3_vcm+2,o3_size,x"20");
+            ELSE
+              mad<=objadrs(o3_diff,o3_vcbm,o3_size,x"20");
+            END IF;
+            
+          WHEN 34 => -- Object 3 : Read
+            o3_mdr<=mdr;
+            o3_diff<=o3_diff+1;
+            IF o3_post='0' THEN
+              o3_vhit<=objvhit(vpos,o3_vcm+2,o3_size);
+              IF objlast(vpos,o3_vcm+2,o3_size) THEN
+                o3_post<='1';
+                o3_cplt<='1';
+                o3_diff<=0;
+                o3_vcbm<=o3_vcb+1;
+              END IF;
+              o3_hcm<=to_integer(o3_hc) + 47;
+            ELSE
+              o3_vhit<=objvhit(o3_diff,o3_vcbm,o3_size);
+              IF objlast(o3_diff,o3_vcbm,o3_size) THEN
+                o3_cplt<='1';
+                o3_diff<=0;
+                o3_vcbm<=o3_vcb+1;
+              END IF;
+              o3_hcm<=to_integer(o3_hcb) + 47;
+            END IF;
+            
+          WHEN 40 => -- Object 4 : Set address
+            IF o4_post='0' THEN
+              mad<=objadrs(vpos,o4_vcm+2,o4_size,x"40");
+            ELSE
+              mad<=objadrs(o4_diff,o4_vcbm,o4_size,x"40");
+            END IF;
+            
+          WHEN 42 => -- Object 4 : Read
+            o4_mdr<=mdr;
+            o4_diff<=o4_diff+1;
+            IF o4_post='0' THEN
+              o4_vhit<=objvhit(vpos,o4_vcm+2,o4_size);
+              IF objlast(vpos,o4_vcm+2,o4_size) THEN
+                o4_post<='1';
+                o4_cplt<='1';
+                o4_diff<=0;
+                o4_vcbm<=o4_vcb+1;
+              END IF;
+              o4_hcm<=to_integer(o4_hc) + 47;
+            ELSE
+              o4_vhit<=objvhit(o4_diff,o4_vcbm,o4_size);
+              IF objlast(o4_diff,o4_vcbm,o4_size) THEN
+                o4_cplt<='1';
+                o4_diff<=0;
+                o4_vcbm<=o4_vcb+1;
+              END IF;
+              o4_hcm<=to_integer(o4_hcb) + 47;
+            END IF;
+            
+            IF vrst_i='1' THEN
               o1_post<='0';
               o2_post<='0';
               o3_post<='0';
               o4_post<='0';
-              o1_diff_clr<='0';
-              o2_diff_clr<='0';
-              o3_diff_clr<='0';
-              o4_diff_clr<='0';
-              o1_vcm<=o1_vc;
-              o2_vcm<=o2_vc;
-              o3_vcm<=o3_vc;
-              o4_vcm<=o4_vc;
-              
-            END IF;
-            
-            hpulse<='1';
-            o1_diff<=(o1_diff+1) MOD 512;
-            o2_diff<=(o2_diff+1) MOD 512;
-            o3_diff<=(o3_diff+1) MOD 512;
-            o4_diff<=(o4_diff+1) MOD 512;
-            IF o1_diff_clr='1' THEN
               o1_diff<=0;
-              o1_diff_clr<='0';
-            END IF;
-            IF o2_diff_clr='1' THEN
               o2_diff<=0;
-              o2_diff_clr<='0';
-            END IF;
-            IF o3_diff_clr='1' THEN
               o3_diff<=0;
-              o3_diff_clr<='0';
-            END IF;
-            IF o4_diff_clr='1' THEN
               o4_diff<=0;
-              o4_diff_clr<='0';
             END IF;
-            IF vpos<20 THEN
-              --valt<='0';
-              vpos20<=0;
-              vbar<=0;
-            ELSE
-              IF vpos20<19 THEN
-                vpos20<=vpos20+1;
-              ELSE
-                vpos20<=0;
-              END IF;
-              IF vpos20=1 OR vpos20=19 THEN
-                vbar<=vbar+1;
-              END IF;
-            END IF;
-          END IF;
-          
-          hpix<=((hpos-30) MOD 128)/8;
-
-          IF hpos=0 THEN
-            o12_cola<='0';
-            o23_cola<='0';
-            o34_cola<='0';
-            o13_cola<='0';
-            o14_cola<='0';
-            o24_cola<='0';
-            o1b_cola<='0';
-            o2b_cola<='0';
-            o3b_cola<='0';
-            o4b_cola<='0';
-            o1_cpla<='0';
-            o2_cpla<='0';
-            o3_cpla<='0';
-            o4_cpla<='0';
-          END IF;
-          IF hpos=210 THEN
-            o12_coll<=o12_cola;
-            o23_coll<=o23_cola;
-            o34_coll<=o34_cola;
-            o13_coll<=o13_cola;
-            o14_coll<=o14_cola;
-            o24_coll<=o24_cola;
-            o1b_coll<=o1b_cola;
-            o2b_coll<=o2b_cola;
-            o3b_coll<=o3b_cola;
-            o4b_coll<=o4b_cola;
-          END IF;
-          IF hpos=210 THEN
-            o1_cplt<=o1_cpla;
-            o2_cplt<=o2_cpla;
-            o3_cplt<=o3_cpla;
-            o4_cplt<=o4_cpla;
-          END IF;
-          
-          ------------------------------------------------------
-        WHEN 1 => -- Vertical background
-          col_argb<='0' & sc_colour; -- Screen colour if no object, no BG
-          o1_hit<='0';
-          o2_hit<='0';
-          o3_hit<='0';
-          o4_hit<='0';
-          bg_hit<='0';
-          bg_dr<=mdr;
-          
-        WHEN 2 => -- Horizontal Background
-          b:=bg_dr(7-(hpix MOD 8))='1'; -- Hit Vertical
-          h:=(hpos+1>=32) AND (hpos+1<32+128) AND
-             (vpos>=20) AND (vpos<20+200); -- Zone affichage fond
-          
-          IF h AND b AND bgmax(mdr,hpos+1,vpos20,vbar) AND bg_ena='1' THEN
-            col_argb<='0' & bg_colour;   -- Background colour
-            bg_hit<='1';
-          END IF;
-          
-        WHEN 3 => -- Object 1
-          IF o1_post='0' THEN
-            IF objfirst(vpos,o1_vc,o1_size) AND hpos=0 THEN
-              o1_mdr<=mdr;
-            END IF;
-            IF objtop(vpos,o1_vc,o1_size) AND hpos=0 THEN
-              o1_vcm<=o1_vc;
-              o1_sizem<=o1_size;
-            END IF;
-            IF objlast(vpos,hpos,o1_vcm,o1_sizem) AND vpos<268 THEN
-              o1_post<='1';
-              o1_cpla<='1';
-              o1_diff_clr<='1';
-              o1_vcbm<=o1_vcb+1;
+            IF vpos=0 THEN
+              o1_post<='0';
+              o2_post<='0';
+              o3_post<='0';
+              o4_post<='0';
+              o1_vcm<=o1_vc+1;
+              o2_vcm<=o2_vc+1;
+              o3_vcm<=o3_vc+1;
+              o4_vcm<=o4_vc+1;
+              o1_diff<=0;
+              o2_diff<=0;
+              o3_diff<=0;
+              o4_diff<=0;
             END IF;
             
-            i:=objbit(hpos,o1_hc,o1_size);
-            h:=objhit(hpos,vpos,o1_hc,o1_vc,o1_size);
-          ELSE
-            IF objfirst(o1_diff,o1_vcbm,o1_size) AND hpos=1 THEN
-              o1_mdr<=mdr;
-            END IF;
-            IF objlast(o1_diff,hpos,o1_vcbm,o1_size) AND vpos<268 THEN
-              o1_cpla<='1';
-              o1_diff_clr<='1';
-              o1_vcbm<=o1_vcb+1;
-            END IF;
-            i:=objbit(hpos,o1_hcb,o1_size);
-            h:=objhit(hpos,o1_diff,o1_hcb,o1_vcbm,o1_size);
-          END IF;
-          IF h AND o1_mdr(i)='1' THEN -- HIT
-            col_argb<='1' & NOT o1_col;
-            o1_hit<=hen_v;
-          END IF;
-          xxx_o1_h<=to_std_logic(h);
-          
-        WHEN 4 => -- Object 2
-          IF o2_post='0' THEN
-            IF objfirst(vpos,o2_vc,o2_size) AND hpos=0 THEN
-              o2_mdr<=mdr;
-            END IF;
-            IF objtop(vpos,o2_vc,o2_size) AND hpos=0 THEN
-              o2_vcm<=o2_vc;
-              o2_sizem<=o2_size;
-            END IF;
-            IF objlast(vpos,hpos,o2_vcm,o2_sizem) AND vpos<268 THEN
-              o2_post<='1';
-              o2_cpla<='1';
-              o2_diff_clr<='1';
-              o2_vcbm<=o2_vcb+1;
-            END IF;
-            i:=objbit(hpos,o2_hc,o2_size);
-            h:=objhit(hpos,vpos,o2_hc,o2_vc,o2_size);
-          ELSE
-            IF objfirst(o2_diff,o2_vcbm,o2_size) AND hpos=1 THEN
-              o2_mdr<=mdr;
-            END IF;
-            IF objlast(o2_diff,hpos,o2_vcbm,o2_size) AND vpos<268 THEN
-              o2_cpla<='1';
-              o2_diff_clr<='1';
-              o2_vcbm<=o2_vcb+1;
-            END IF;
-            i:=objbit(hpos,o2_hcb,o2_size);
-            h:=objhit(hpos,o2_diff,o2_hcb,o2_vcbm,o2_size);
-          END IF;
-          IF h AND o2_mdr(i)='1' THEN -- HIT
-            col_argb<=orcol(o1_hit,col_argb,'1' & NOT o2_col);
-            o2_hit<=hen_v;
-          END IF;
-          
-       WHEN 5 => -- Object 3
-          IF o3_post='0' THEN
-            IF objfirst(vpos,o3_vc,o3_size) AND hpos=0 THEN
-              o3_mdr<=mdr;
-            END IF;
-            IF objtop(vpos,o3_vc,o3_size) AND hpos=0 THEN
-              o3_vcm<=o3_vc;
-              o3_sizem<=o3_size;
-            END IF;
-            IF objlast(vpos,hpos,o3_vcm,o3_sizem) AND vpos<268 THEN
-              o3_post<='1';
-              o3_cpla<='1';
-              o3_diff_clr<='1';
-              o3_vcbm<=o3_vcb+1;
-            END IF;
-            i:=objbit(hpos,o3_hc,o3_size);
-            h:=objhit(hpos,vpos,o3_hc,o3_vc,o3_size);
-          ELSE
-            IF objfirst(o3_diff,o3_vcbm,o3_size) AND hpos=1 THEN
-              o3_mdr<=mdr;
-            END IF;
-            IF objlast(o3_diff,hpos,o3_vcbm,o3_size) AND vpos<268 THEN
-              o3_cpla<='1';
-              o3_diff_clr<='1';
-              o3_vcbm<=o3_vcb+1;
-            END IF;
-            i:=objbit(hpos,o3_hcb,o3_size);
-            h:=objhit(hpos,o3_diff,o3_hcb,o3_vcbm,o3_size);
-          END IF;
-          IF h AND o3_mdr(i)='1' THEN -- HIT
-            col_argb<=orcol(o1_hit OR o2_hit,col_argb,'1' & NOT o3_col);
-            o3_hit<=hen_v;
-          END IF;
+          WHEN 48 TO 227 =>
 
-        WHEN 6 => -- Object 4
-          IF o4_post='0' THEN
-            IF objfirst(vpos,o4_vc,o4_size) AND hpos=1 THEN
-              o4_mdr<=mdr;
+            -- Screen colour ---------------------
+            col_v:=colo(sc_colour,'0',icol,bright);
+            
+            -- Background ------------------------
+            IF hpix_v<8 THEN
+              b:=bgv0_dr(7-(hpix_v MOD 8))='1'; -- Hit Vertical
+            ELSE
+              b:=bgv1_dr(7-(hpix_v MOD 8))='1'; -- Hit Vertical
+            END  IF;
+            h:=(hpos>=78) AND (hpos<78+128) AND (vpos>=22) AND (vpos<22+200);
+            
+            IF h AND b AND bgmax(bgh_dr,hpos,vpos20,vbar) AND bg_ena='1' THEN
+              col_v:=colo(bg_colour,'0',icol,bright); -- Background colour
+              bg_hit_v:='1';
             END IF;
-            IF objtop(vpos,o4_vc,o4_size) AND hpos=1 THEN
-              o4_vcm<=o4_vc;
-              o4_sizem<=o4_size;
+            
+            cob_v:=x"F";
+            
+            -- Obj 1 -----------------------------
+            i:=objbit(hpos,o1_hcm,o1_size);
+            IF objhhit(hpos,o1_hcm,o1_size) AND o1_mdr(i)='1' AND o1_vhit THEN
+              cob_v:=cob_v AND colo(o1_col,'1',icol,bright);
+              o1_hit_v:='1';
             END IF;
-            IF objlast(vpos,hpos,o4_vcm,o4_sizem) AND vpos<268 THEN
-              o4_post<='1';
-              o4_cpla<='1';
-              o4_diff_clr<='1';
-              o4_vcbm<=o4_vcb+1;
+            
+            -- Obj 2 -----------------------------
+            i:=objbit(hpos,o2_hcm,o2_size);
+            IF objhhit(hpos,o2_hcm,o2_size) AND o2_mdr(i)='1' AND o2_vhit THEN
+              cob_v:=cob_v AND colo(o2_col,'1',icol,bright);
+              o2_hit_v:='1';
             END IF;
-            i:=objbit(hpos,o4_hc,o4_size);
-            h:=objhit(hpos,vpos,o4_hc,o4_vc,o4_size);
-          ELSE
-            IF objfirst(o4_diff,o4_vcbm,o4_size) AND hpos=0 THEN
-              o4_mdr<=mdr;
+            
+            -- Obj 3 -----------------------------
+            i:=objbit(hpos,o3_hcm,o3_size);
+            IF objhhit(hpos,o3_hcm,o3_size) AND o3_mdr(i)='1' AND o3_vhit THEN
+              cob_v:=cob_v AND colo(o3_col,'1',icol,bright);
+              o3_hit_v:='1';
             END IF;
-            IF objlast(o4_diff,hpos,o4_vcbm,o4_size) AND vpos<268 THEN
-              o4_cpla<='1';
-              o4_diff_clr<='1';
-              o4_vcbm<=o4_vcb+1;
+            
+            -- Obj 4 -----------------------------
+            i:=objbit(hpos,o4_hcm,o4_size);
+            IF objhhit(hpos,o4_hcm,o4_size) AND o4_mdr(i)='1' AND o4_vhit THEN
+              cob_v:=cob_v AND colo(o4_col,'1',icol,bright);
+              o4_hit_v:='1';
             END IF;
-            i:=objbit(hpos,o4_hcb,o4_size);
-            h:=objhit(hpos,o4_diff,o4_hcb,o4_vcbm,o4_size);
-          END IF;
-          IF h AND o4_mdr(i)='1' THEN -- HIT
-            col_argb<=orcol(o1_hit OR o2_hit OR o3_hit,col_argb,'1' & NOT o4_col);
-            o4_hit<=hen_v;
-          END IF;
-          
-        WHEN 7 => -- Score
-          vid_argb<=col_argb;
-          IF score(hpos,vpos,
-                   s1_val,s2_val,s3_val,s4_val,s_pos,s_form) THEN
-            vid_argb<='1' & NOT bg_colour;
-          END IF;
+            
+            IF (o1_hit_v OR o2_hit_v OR o3_hit_v OR o4_hit_v)='1' THEN
+              col_v:=cob_v;
+            END IF;
+            
+            -- Score -----------------------------
+            IF score(hpos,vpos,s1_val,s2_val,s3_val,s4_val,s_pos,s_form) THEN
+              col_v:=colo(bg_colour,'1',icol,bright);
+            END IF;
+            
+            vid_argb<=col_v;
+            
+            -- Collisions ------------------------
+            o12_cola<=o1_hit_v AND o2_hit_v;
+            o23_cola<=o2_hit_v AND o3_hit_v;
+            o34_cola<=o3_hit_v AND o4_hit_v;
+            o13_cola<=o1_hit_v AND o3_hit_v;
+            o14_cola<=o1_hit_v AND o4_hit_v;
+            o24_cola<=o2_hit_v AND o4_hit_v;
+            o1b_cola<=o1_hit_v AND bg_hit_v;
+            o2b_cola<=o2_hit_v AND bg_hit_v;
+            o3b_cola<=o3_hit_v AND bg_hit_v;
+            o4b_cola<=o4_hit_v AND bg_hit_v;
 
-          o12_cola<=(o1_hit AND o2_hit) OR o12_cola;
-          o23_cola<=(o2_hit AND o3_hit) OR o23_cola;
-          o34_cola<=(o3_hit AND o4_hit) OR o34_cola;
-          o13_cola<=(o1_hit AND o3_hit) OR o13_cola;
-          o14_cola<=(o1_hit AND o4_hit) OR o14_cola;
-          o24_cola<=(o2_hit AND o4_hit) OR o24_cola;
-          o1b_cola<=(o1_hit AND bg_hit) OR o1b_cola;
-          o2b_cola<=(o2_hit AND bg_hit) OR o2b_cola;
-          o3b_cola<=(o3_hit AND bg_hit) OR o3b_cola;
-          o4b_cola<=(o4_hit AND bg_hit) OR o4b_cola;
-          
-          hpix<=((hpos-30) MOD 128)/8;
-
-      END CASE;
-    
-      --------------------------------------------
-      vid_de  <=to_std_logic(hpos<hdisp AND vpos<vdisp);
-      vid_ce  <=tick_divi;
-      vid_hsyn<=to_std_logic(hpos>=hsyncstart AND hpos<hsyncend);
-      vid_vsyn<=to_std_logic(vpos>=vsyncstart AND hpos<vsyncend);
+          WHEN OTHERS =>
+            NULL;
+        END CASE;
+        
+        o1_hit<=o1_hit_v;
+        o2_hit<=o2_hit_v;
+        o3_hit<=o3_hit_v;
+        o4_hit<=o4_hit_v;
+        
+      END IF;
       
-      vrst_i  <=to_std_logic(vpos>=vdisp+4);
+      --------------------------------------------
+      hdispstart<=55;
+      hdispend  <=227;
+      hsyncstart<=11;
+      hsyncend  <=28;
+      htotal    <=227;
+      
+      vdisp     <=268;
+      vsyncstart<=301;
+      vsyncend  <=303;
+      vtotal    <=312;
+      
+      vid_de  <=to_std_logic((hpos>=hdispstart) AND
+                             vpos<vtotal-43);
+      vid_ce  <=to_std_logic(cyc=0);
+      vid_hsyn<=to_std_logic(hpos>=hsyncstart AND hpos<hsyncend);
+      vid_vsyn<=to_std_logic((vpos=vsyncstart AND hpos>=hsyncstart) OR
+                             (vpos>vsyncstart AND vpos<vsyncend) OR
+                             (vpos=vsyncend   AND hpos<hsyncstart));
+      
+      vrst_i  <=to_std_logic(vpos>=vtotal-VDELAY);
       vrst_pre<=vrst_i;
+      hrst<=to_std_logic(hpos>=6 AND hpos<=HDELAY);
       
       --------------------------------------------
       int_i<=(int_i OR
               (o1_cplt OR o2_cplt OR o3_cplt OR o4_cplt) OR
               (vrst_i AND NOT vrst_pre))
-        AND NOT intack AND NOT (NOT vrst_i AND vrst_pre);
+              AND NOT intack AND NOT (NOT vrst_i AND vrst_pre);
     --------------------------------------------
     END IF;
-
-
+    
   END PROCESS Vid;
 
   vrst<=vrst_i;
-
-  ------------------------------------------------------------------------------
-  DivCLK:PROCESS (clk,reset_na) IS
-  BEGIN
-    IF reset_na='0' THEN
-      tick_divi<='0';
-    ELSIF rising_edge(clk) THEN
-      IF divi=7 THEN
-        divi<=0;
-        tick_divi<='1';
-    ELSE
-        divi<=divi+1;
-        tick_divi<='0';
-      END IF;
-    END IF;
-  END PROCESS DivCLK;
   
   ------------------------------------------------------------------------------
   Sono:PROCESS(clk) IS
   BEGIN
-
     IF rising_edge(clk) THEN
       IF hpulse='1' THEN
         IF snd_cpt<sper THEN
@@ -1125,20 +1048,18 @@ BEGIN
       IF sper=x"00" THEN
         sound_i<='0';
       END IF;
-      
+
+      IF tick='1' THEN
+        reqd<=req;
+      END IF;
+
     END IF;
   END PROCESS Sono;
   
   sound<=x"7F" WHEN sound_i='0' ELSE x"80";
   
-  ack<='1';
+  ack<=to_std_logic(hrst='0' OR vrst_i='1') AND reqd AND req;
   int<=int_i;
   ivec<=x"03";
-
-  vcbm1<=o1_vcbm;
-  vcbm2<=o2_vcbm;
-  vcbm3<=o3_vcbm;
-  vcbm4<=o4_vcbm;
   
 END ARCHITECTURE rtl;
-

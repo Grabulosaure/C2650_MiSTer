@@ -40,12 +40,10 @@
 --      OP    IMM1  IMM2
 --                  WIDX
 
-
 -- LOAD ABSOLUTE INDIRECT
 -- A    A+1   A+2   IX     IX+1   AD
 --      OP    IMM1  IMM2   ABS1   ABS2   DATA
 --                                WIDX   WR
-
 
 -- Si indexed (absolute indexed)
 --   Base
@@ -142,7 +140,6 @@ ARCHITECTURE rtl OF sgs2650 IS
   SIGNAL rh,rh_c : uv8;   -- Holding Register : Second instruction byte
   SIGNAL ru,ru_c : uv8;   -- Holding Register : Second instruction byte
   SIGNAL dec,dec_c : type_deco; -- Decoded opcode
-
 
   SIGNAL xxx_rs_v : uv8;
   SIGNAL xxx_ph   : string(1 TO 4);
@@ -849,7 +846,7 @@ BEGIN
       indexed<=indexed_c;
       intp<=intp_c;
       intack<=to_std_logic(state=sINTER);
-
+      
       ad_i<=ad_c;
       wr_i<=wr_c;
       dw_i<=dw_c;
