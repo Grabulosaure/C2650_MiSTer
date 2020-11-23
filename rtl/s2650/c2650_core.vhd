@@ -15,24 +15,28 @@ USE std.textio.ALL;
 LIBRARY work;
 USE work.base_pack.ALL;
 
-ENTITY emu IS
+ENTITY c2650_core IS
   PORT (
     -- Master input clock
-    clk_50m          : IN    std_logic;
-
+    clk              : IN    std_logic;
+    
     -- Async reset from top-level module. Can be used as initial reset.
     reset            : IN    std_logic;
 
     -- Must be passed to hps_io module
-    hps_bus          : INOUT std_logic_vector(45 DOWNTO 0);
-    
+    ntsc_pal         : IN    std_logic;
+    arca             : IN    std_logic;
+    swap             : IN    std_logic;
+    swapxy           : IN    std_logic;
+    bright           : IN    std_logic;
+
     -- Base video clock. Usually equals to CLK_SYS.
     clk_video        : OUT   std_logic;
 
     -- Multiple resolutions are supported using different CE_PIXEL rates.
     -- Must be based on CLK_VIDEO
     ce_pixel         : OUT   std_logic;
-    
+
     -- VGA
     vga_r            : OUT   std_logic_vector(7 DOWNTO 0);
     vga_g            : OUT   std_logic_vector(7 DOWNTO 0);
@@ -40,205 +44,30 @@ ENTITY emu IS
     vga_hs           : OUT   std_logic; -- positive pulse!
     vga_vs           : OUT   std_logic; -- positive pulse!
     vga_de           : OUT   std_logic; -- = not (VBlank or HBlank)
-    vga_f1           : OUT   std_logic;
-    vga_sl           : OUT   std_logic_vector(1 DOWNTO 0);
-    
-    -- LED
-    led_user         : OUT   std_logic; -- 1 - ON, 0 - OFF.
-    
-    -- b[1]: 0 - LED status is system status ORed with b[0]
-    --       1 - LED status is controled solely by b[0]
-    -- hint: supply 2'b00 to let the system control the LED.
-    led_power        : OUT   std_logic_vector(1 DOWNTO 0);
-    led_disk         : OUT   std_logic_vector(1 DOWNTO 0);
-    
-    video_arx        : OUT   std_logic_vector(7 DOWNTO 0);
-    video_ary        : OUT   std_logic_vector(7 DOWNTO 0);
-    
+
     -- AUDIO
-    audio_l          : OUT   std_logic_vector(15 DOWNTO 0);
-    audio_r          : OUT   std_logic_vector(15 DOWNTO 0);
-    audio_s          : OUT   std_logic; -- 1 = signed audio, 0 = unsigned
-    -- 0 - no mix, 1 - 25%, 2 - 50%, 3 - 100% (mono)
-    audio_mix        : OUT   std_logic_vector(1 DOWNTO 0);
+    sound            : OUT   std_logic_vector(7 DOWNTO 0);
     
-    adc_bus          : INOUT std_logic_vector(3 DOWNTO 0);
+    ps2_key           : IN  std_logic_vector(10 DOWNTO 0);    
+    joystick_0        : IN  std_logic_vector(31 DOWNTO 0);
+    joystick_1        : IN  std_logic_vector(31 DOWNTO 0);
+    joystick_analog_0 : IN  std_logic_vector(15 DOWNTO 0);
+    joystick_analog_1 : IN  std_logic_vector(15 DOWNTO 0);
     
-    -- SD-SPI
-    sd_sck           : OUT   std_logic := 'Z';
-    sd_mosi          : OUT   std_logic := 'Z';
-    sd_miso          : IN    std_logic;
-    sd_cs            : OUT   std_logic := 'Z';
-    sd_cd            : IN    std_logic;
+    ioctl_download    : IN  std_logic;
+    ioctl_index       : IN  std_logic_vector(7 DOWNTO 0);
+    ioctl_wr          : IN  std_logic;
+    ioctl_addr        : IN  std_logic_vector(24 DOWNTO 0);
+    ioctl_dout        : IN  std_logic_vector(7 DOWNTO 0);
+    ioctl_wait        : OUT std_logic
+    );
+END c2650_core;
 
-    -- High latency DDR3 RAM interface
-    -- Use for non-critical time purposes
-    ddram_clk        : OUT   std_logic;
-    ddram_busy       : IN    std_logic;
-    ddram_burstcnt   : OUT   std_logic_vector(7 DOWNTO 0);
-    ddram_addr       : OUT   std_logic_vector(28 DOWNTO 0);
-    ddram_dout       : IN    std_logic_vector(63 DOWNTO 0);
-    ddram_dout_ready : IN    std_logic;
-    ddram_rd         : OUT   std_logic;
-    ddram_din        : OUT   std_logic_vector(63 DOWNTO 0);
-    ddram_be         : OUT   std_logic_vector(7 DOWNTO 0);
-    ddram_we         : OUT   std_logic;
-
-    -- SDRAM interface with lower latency
-    sdram_clk        : OUT   std_logic;
-    sdram_cke        : OUT   std_logic;
-    sdram_a          : OUT   std_logic_vector(12 DOWNTO 0);
-    sdram_ba         : OUT   std_logic_vector(1 DOWNTO 0);
-    sdram_dq         : INOUT std_logic_vector(15 DOWNTO 0);
-    sdram_dqml       : OUT   std_logic;
-    sdram_dqmh       : OUT   std_logic;
-    sdram_ncs        : OUT   std_logic;
-    sdram_ncas       : OUT   std_logic;
-    sdram_nras       : OUT   std_logic;
-    sdram_nwe        : OUT   std_logic;
-    
-    uart_cts         : IN    std_logic;
-    uart_rts         : OUT   std_logic;
-    uart_rxd         : IN    std_logic;
-    uart_txd         : OUT   std_logic;
-    uart_dtr         : OUT   std_logic;
-    uart_dsr         : IN    std_logic;
-    
-    user_in          : IN    std_logic_vector(5 DOWNTO 0);
-    user_out         : OUT   std_logic_vector(5 DOWNTO 0);
-    
-    osd_status       : IN    std_logic);
-END emu;
-
-ARCHITECTURE struct OF emu IS
+ARCHITECTURE struct OF c2650_core IS
 
   CONSTANT CDIV : natural := 4 * 8;
-  
-  COMPONENT pll IS
-    PORT (
-      refclk   : in  std_logic; -- clk
-      rst      : in  std_logic; -- reset
-      outclk_0 : out std_logic; -- clk
-      outclk_1 : out std_logic; -- clk
-      locked   : out std_logic  -- export
-      );
-  END COMPONENT pll;
-  
-  CONSTANT CONF_STR : string := 
-    "CO2650;;" &
-    "F,BIN,Load Cartridge;" &
---    "O5,Video standard,PAL,NTSC;" &
-    "O1,Mode,Interton,Arcadia;" &
-    "O3,Swap Joystick,Off,On;" &
-    "O4,Swap Joystick XY,Off,On;" &
-    "OC,Bright,Off,On;" &
-    "O6,Aspect ratio,4:3,16:9;" &
-    "J,Start,Select,1,2,3,4,5,6,7,8,9,10,11,12;" &
-    "V1.0";
-  
-  FUNCTION to_slv(s: string) return std_logic_vector is 
-    CONSTANT ss : string(1 to s'length) := s; 
-    VARIABLE rval : std_logic_vector(1 to 8 * s'length); 
-    VARIABLE p : integer; 
-    VARIABLE c : integer; 
-  BEGIN
-    FOR i in ss'range LOOP
-      p := 8 * i;
-      c := character'pos(ss(i));
-      rval(p - 7 to p) := std_logic_vector(to_unsigned(c,8)); 
-    END LOOP;
-    RETURN rval;
-  END FUNCTION; 
-
-  COMPONENT hps_io
-    GENERIC (
-      STRLEN : integer;
-      PS2DIV : integer := 1000;
-      WIDE   : integer := 0; --  8bits download bus
-      VDNUM  : integer := 1;
-      PS2WE  : integer := 0);
-    PORT (
-      clk_sys           : IN  std_logic;
-      hps_bus           : INOUT std_logic_vector(45 DOWNTO 0);
-
-      conf_str          : IN  std_logic_vector(8*STRLEN-1 DOWNTO 0);
-      joystick_0        : OUT std_logic_vector(31 DOWNTO 0);
-      joystick_1        : OUT std_logic_vector(31 DOWNTO 0);
-      joystick_2        : OUT std_logic_vector(31 DOWNTO 0);
-      joystick_3        : OUT std_logic_vector(31 DOWNTO 0);
-      joystick_4        : OUT std_logic_vector(31 DOWNTO 0);
-      joystick_5        : OUT std_logic_vector(31 DOWNTO 0);
-      joystick_analog_0 : OUT std_logic_vector(15 DOWNTO 0);
-      joystick_analog_1 : OUT std_logic_vector(15 DOWNTO 0);
-      joystick_analog_2 : OUT std_logic_vector(15 DOWNTO 0);
-      joystick_analog_3 : OUT std_logic_vector(15 DOWNTO 0);
-      joystick_analog_4 : OUT std_logic_vector(15 DOWNTO 0);
-      joystick_analog_5 : OUT std_logic_vector(15 DOWNTO 0);
-      buttons           : OUT std_logic_vector(1 DOWNTO 0);
-      forced_scandoubler: OUT std_logic;
-      status            : OUT std_logic_vector(31 DOWNTO 0);
-      status_in         : IN  std_logic_vector(31 DOWNTO 0);
-      status_set        : IN  std_logic;
-      status_menumask   : IN  std_logic_vector(15 DOWNTO 0);
-      new_vmode         : IN  std_logic;
-      img_mounted       : OUT std_logic;
-      img_readonly      : OUT std_logic;
-      img_size          : OUT std_logic_vector(63 DOWNTO 0);
-      sd_lba            : IN  std_logic_vector(31 DOWNTO 0);
-      sd_rd             : IN  std_logic;
-      sd_wr             : IN  std_logic;
-      sd_ack            : OUT std_logic;
-      sd_conf           : IN  std_logic;
-      sd_ack_conf       : OUT std_logic;
-      sd_buff_addr      : OUT std_logic_vector(8 DOWNTO 0);
-      sd_buff_dout      : OUT std_logic_vector(7 DOWNTO 0);
-      sd_buff_din       : IN  std_logic_vector(7 DOWNTO 0);
-      sd_buff_wr        : OUT std_logic;
-      ioctl_download    : OUT std_logic;
-      ioctl_index       : OUT std_logic_vector(7 DOWNTO 0);
-      ioctl_wr          : OUT std_logic;
-      ioctl_addr        : OUT std_logic_vector(24 DOWNTO 0);
-      ioctl_dout        : OUT std_logic_vector(7 DOWNTO 0);
-      ioctl_wait        : IN  std_logic;
-      rtc               : OUT std_logic_vector(64 DOWNTO 0);
-      timestamp         : OUT std_logic_vector(32 DOWNTO 0);
-      uart_mode         : IN  std_logic_vector(15 DOWNTO 0);
-      ps2_kbd_clk_out   : OUT std_logic;
-      ps2_kbd_data_out  : OUT std_logic;
-      ps2_kbd_clk_in    : IN  std_logic;
-      ps2_kbd_data_in   : IN  std_logic;
-      ps2_kbd_led_use   : IN  std_logic_vector(2 DOWNTO 0);
-      ps2_kbd_led_status: IN  std_logic_vector(2 DOWNTO 0);
-      ps2_mouse_clk_out : OUT std_logic;
-      ps2_mouse_data_out: OUT std_logic;
-      ps2_mouse_clk_in  : IN  std_logic;
-      ps2_mouse_data_in : IN  std_logic;
-      ps2_key           : OUT std_logic_vector(10 DOWNTO 0);
-      ps2_mouse         : OUT std_logic_vector(24 DOWNTO 0);
-      ps2_mouse_ext     : OUT std_logic_vector(15 DOWNTO 0));
-  END COMPONENT hps_io;
-  
-  SIGNAL joystick_0      : std_logic_vector(31 DOWNTO 0);
-  SIGNAL joystick_1      : std_logic_vector(31 DOWNTO 0);
-  SIGNAL joystick_analog_0 : std_logic_vector(15 DOWNTO 0);
-  SIGNAL joystick_analog_1 : std_logic_vector(15 DOWNTO 0);
-  SIGNAL buttons         : std_logic_vector(1 DOWNTO 0);
-  SIGNAL status          : std_logic_vector(31 DOWNTO 0);
-  SIGNAL status_in       : std_logic_vector(31 DOWNTO 0):=x"00000000";
-  SIGNAL status_set      : std_logic :='0';
-  SIGNAL status_menumask : std_logic_vector(15 DOWNTO 0):=x"0000";
-  SIGNAL new_vmode       : std_logic :='0';
  
-  SIGNAL ioctl_download   : std_logic;
-  SIGNAL ioctl_index      : std_logic_vector(7 DOWNTO 0);
-  SIGNAL ioctl_wr         : std_logic;
-  SIGNAL ioctl_addr       : std_logic_vector(24 DOWNTO 0);
-  SIGNAL ioctl_dout       : std_logic_vector(7 DOWNTO 0);
-  SIGNAL ioctl_wait       : std_logic :='0';
-  
-  SIGNAL ntsc_pal,arca,swap,swapxy : std_logic;
-  
-  SIGNAL ps2_key,ps2_key_delay : std_logic_vector(10 DOWNTO 0);
+  SIGNAL ps2_key_delay : std_logic_vector(10 DOWNTO 0);
   
   SIGNAL key_0, key_1 , key_2 , key_3  : std_logic;
   SIGNAL key_4, key_5 , key_6 , key_7  : std_logic;
@@ -262,7 +91,7 @@ ARCHITECTURE struct OF emu IS
   --------------------------------------
   SIGNAL in_vol : unsigned(1 DOWNTO 0);
   SIGNAL in_icol,in_explo,in_explo2,in_noise,in_snd : std_logic;
-  SIGNAL sound,in_sound,ac_sound,in_sound2 : unsigned(7 DOWNTO 0);
+  SIGNAL in_sound,ac_sound,in_sound2 : unsigned(7 DOWNTO 0);
   SIGNAL lfsr : uv15;
   SIGNAL explo : natural RANGE 0 TO 1000000;
   SIGNAL divlfsr : uint8;
@@ -270,8 +99,6 @@ ARCHITECTURE struct OF emu IS
   SIGNAL pot1,pot2 : unsigned(7 DOWNTO 0);
   SIGNAL potl_a,potl_b,potr_a,potr_b : unsigned(7 DOWNTO 0);
   SIGNAL potl_v,potl_h,potr_v,potr_h : unsigned(7 DOWNTO 0);
-  
-  SIGNAL clksys,clksys_ntsc,clksys_pal,pll_locked : std_logic;
   
   SIGNAL tick_cpu_cpt : natural RANGE 0 TO CDIV-1;
   SIGNAL tick_cpu : std_logic;
@@ -311,139 +138,13 @@ ARCHITECTURE struct OF emu IS
   
   SIGNAL in_vrst,ac_vrst : std_logic;
   
-  SIGNAL vga_r_i  : uv8;
-  SIGNAL vga_g_i  : uv8;
-  SIGNAL vga_b_i  : uv8;
+  SIGNAL vga_r_i,vga_g_i,vga_b_i : uv8;
   SIGNAL vga_de_i : std_logic;
   
-  SIGNAL ovo_ena  : std_logic;
-  SIGNAL ovo_in0  : unsigned(0 TO 32*5-1) :=(OTHERS =>'0');
-  SIGNAL ovo_in1  : unsigned(0 TO 32*5-1) :=(OTHERS =>'0');
-  
-  -- OVO -----------------------------------------
   FILE fil : text OPEN write_mode IS "trace_mem.log";
   
 BEGIN
 
-  hps : hps_io
-    GENERIC MAP (
-      STRLEN => CONF_STR'length)
-    PORT MAP (
-      clk_sys            => clksys,
-      hps_bus            => hps_bus,
-      conf_str           => to_slv(CONF_STR),
-      buttons            => buttons,
-      forced_scandoubler => OPEN,
-      joystick_0         => joystick_0,
-      joystick_1         => joystick_1,
-      joystick_2         => OPEN,
-      joystick_3         => OPEN,
-      joystick_4         => OPEN,
-      joystick_5         => OPEN,
-      joystick_analog_0  => joystick_analog_0,
-      joystick_analog_1  => joystick_analog_1,
-      joystick_analog_2  => OPEN,
-      joystick_analog_3  => OPEN,
-      joystick_analog_4  => OPEN,
-      joystick_analog_5  => OPEN,
-      status             => status,
-      status_in          => status_in,
-      status_set         => status_set,
-      status_menumask    => status_menumask,
-      new_vmode          => new_vmode,
-      img_mounted        => OPEN,
-      img_readonly       => OPEN,
-      img_size           => OPEN,
-      sd_lba             => std_logic_vector'(x"0000_0000"),
-      sd_rd              => '0',
-      sd_wr              => '0',
-      sd_ack             => OPEN,
-      sd_conf            => '0',
-      sd_ack_conf        => OPEN,
-      sd_buff_addr       => OPEN,
-      sd_buff_dout       => OPEN,
-      sd_buff_din        => std_logic_vector'(x"00"),
-      sd_buff_wr         => OPEN,
-      ioctl_download     => ioctl_download,
-      ioctl_index        => ioctl_index,
-      ioctl_wr           => ioctl_wr,
-      ioctl_addr         => ioctl_addr,
-      ioctl_dout         => ioctl_dout,
-      ioctl_wait         => ioctl_wait,
-      rtc                => OPEN,
-      timestamp          => OPEN,
-      uart_mode          => std_logic_vector'(x"0000"),
-      ps2_kbd_clk_out    => OPEN,
-      ps2_kbd_data_out   => OPEN,
-      ps2_kbd_clk_in     => '1',
-      ps2_kbd_data_in    => '1',
-      ps2_kbd_led_use    => std_logic_vector'("000"),
-      ps2_kbd_led_status => std_logic_vector'("000"),
-      ps2_mouse_clk_out  => OPEN,
-      ps2_mouse_data_out => OPEN,
-      ps2_mouse_clk_in   => '1',
-      ps2_mouse_data_in  => '1',
-      ps2_key            => ps2_key,
-      ps2_mouse          => OPEN,
-      ps2_mouse_ext      => OPEN);
-  
-  ntsc_pal<='1'; --status(5);
-  arca<=status(1); -- 0=Interton VC2000  1=Emerson Arcadia
-  swap<=status(3);
-  swapxy<=status(4); 
-
-  ----------------------------------------------------------
-  vga_sl<="00";
-  vga_f1<='0';
-  
-  video_arx <= x"04" WHEN status(6)='0' ELSE x"16";
-  video_ary <= x"03" WHEN status(6)='0' ELSE x"09";
-  
-  ----------------------------------------------------------
-  sd_sck<='0';
-  sd_mosi<='0';
-  sd_cs<='0';
-  ddram_clk<='0';
-  ddram_burstcnt<=(OTHERS =>'0');
-  ddram_addr   <=(OTHERS =>'0');
-  ddram_rd     <='0';
-  ddram_din    <=(OTHERS =>'0');
-  ddram_be     <=(OTHERS =>'0');
-  ddram_we     <='0';
-  
-  -- SDRAM interface with lower latency
-  sdram_clk    <='0';
-  sdram_cke    <='0';
-  sdram_a      <=(OTHERS =>'0');
-  sdram_ba     <=(OTHERS =>'0');
-  sdram_dq     <=(OTHERS =>'0');
-  sdram_dqml   <='0';
-  sdram_dqmh   <='0';
-  sdram_ncs    <='0';
-  sdram_ncas   <='0';
-  sdram_nras   <='0';
-  sdram_nwe    <='0';
-  uart_rts     <='0';
-  uart_txd     <='0';
-  uart_dtr     <='0';
-  user_out     <=(OTHERS =>'Z');
-  
-  ----------------------------------------------------------
-  ipll : pll
-    PORT MAP (
-      refclk   => clk_50m,
-      rst      => '0',
-      outclk_0 => clksys_ntsc,
-      outclk_1 => clksys_pal,
-      locked   => pll_locked
-      );
-  
-  clksys<=clksys_ntsc; --pal;
-  
-  -- CLK = Pix CLK * 8
-  -- NTSC : 3.579545MHz   * 8
-  -- PAL  : 4.43361875MHz * 8
-  
   ----------------------------------------------------------
   -- Interton VC4000 & clones
   --  xx0 0aaa aaaa aaaa : Cardtrige : 2ko
@@ -473,12 +174,12 @@ BEGIN
       vid_ce    => in_vga_ce,
       sound     => in_sound,
       icol      => in_icol,
-      bright    => status(12),
+      bright    => bright,
       pot1      => pot1,
       pot2      => pot2,
       np        => ntsc_pal,
       reset     => reset,
-      clk       => clksys,
+      clk       => clk,
       reset_na  => reset_na);
 
   dr_in_key<=in_volnoise  WHEN ad_delay(3 DOWNTO 0)=x"0" ELSE -- 1E80
@@ -511,7 +212,7 @@ BEGIN
 
   in_volnoise <=in_vol & in_icol & in_explo & in_noise & in_snd & "00";
 
-  PROCESS(clksys,reset_na) IS
+  PROCESS(clk,reset_na) IS
     VARIABLE a_v,b_v : uv8;
   BEGIN
     IF reset_na='0' THEN
@@ -522,7 +223,7 @@ BEGIN
       in_snd<='0';
       lfsr<=to_unsigned(1,15);
       
-    ELSIF rising_edge(clksys) THEN
+    ELSIF rising_edge(clk) THEN
       IF arca='0' AND ad_delay(3 DOWNTO 0)=x"0" AND ad_delay(12)='1' AND
         ad_delay(11 DOWNTO 8)="1110" AND wr='1' AND tick_cpu='1' THEN
         in_vol<=dw(7 DOWNTO 6);
@@ -634,7 +335,7 @@ BEGIN
       pot4      => potl_h,
       np        => ntsc_pal,
       reset     => reset,
-      clk       => clksys,
+      clk       => clk,
       reset_na  => reset_na);
   
   --   1 2 3
@@ -687,7 +388,7 @@ BEGIN
   potr_v<=mux(swapxy,potr_b,potr_a);
   
   ----------------------------------------------------------
-  KeyCodes:PROCESS (clksys,reset_na) IS
+  KeyCodes:PROCESS (clk,reset_na) IS
   BEGIN
     IF reset_na='0' THEN
          key_0<='0';
@@ -716,7 +417,7 @@ BEGIN
          key_minus<='0'; -- -
          key_select<='0'; -- SPACE
          key_start <='0'; -- RETURN
-    ELSIF rising_edge(clksys) THEN
+    ELSIF rising_edge(clk) THEN
       ps2_key_delay<=ps2_key;
       IF ps2_key_delay(10)/=ps2_key(10) THEN
         CASE ps2_key(7 DOWNTO 0) IS
@@ -792,9 +493,9 @@ BEGIN
         tick_cpu AND ack_uvi WHEN sel_uvi='1' ELSE
         tick_cpu AND ack_mem;
 
-  PROCESS (clksys) IS
+  PROCESS (clk) IS
   BEGIN
-    IF rising_edge(clksys) THEN
+    IF rising_edge(clk) THEN
       IF tick_cpu='1' THEN
         ack_mem_p<=req_mem AND NOT ack_mem;
         ack_mem_p2<=ack_mem_p AND req_mem;
@@ -805,7 +506,7 @@ BEGIN
   
   --ack<='0';
 
-  ack<=ackp WHEN rising_edge(clksys);
+  ack<=ackp WHEN rising_edge(clk);
   
   ad_rom <="000" & ad(11 DOWNTO 0) WHEN arca='1' AND ad(14 DOWNTO 12)="000" ELSE
            "001" & ad(11 DOWNTO 0) WHEN arca='1' AND ad(14 DOWNTO 12)="010" ELSE
@@ -830,11 +531,11 @@ BEGIN
       sense    => sense,
       flag     => flag,
       reset    => creset,
-      clk      => clksys,
+      clk      => clk,
       reset_na => reset_na);
   
   int<=int_pvi AND NOT arca;
-  ad_delay<=ad WHEN rising_edge(clksys);
+  ad_delay<=ad WHEN rising_edge(clk);
   
   ----------------------------------------------------------
 --pragma synthesis_off
@@ -843,7 +544,7 @@ BEGIN
     VARIABLE doread : boolean := false;
     VARIABLE adr : uv15;
   BEGIN
-    wure(clksys);
+    wure(clk);
     IF doread THEN
       write(lout,"RD(" & to_hstring('0' & adr) & ")=" & to_hstring(dr));
       writeline(fil,lout);
@@ -862,23 +563,19 @@ BEGIN
 
 --pragma synthesis_on
   ----------------------------------------------------------
-  audio_l<=std_logic_vector(sound) & x"00";
-  audio_r<=std_logic_vector(sound) & x"00";
-  audio_s<='1';
-  audio_mix<="11";
   
-  sound <=mux(arca,ac_sound,in_sound2) WHEN rising_edge(clksys);
+  sound <=std_logic_vector(mux(arca,ac_sound,in_sound2)) WHEN rising_edge(clk);
   
   ----------------------------------------------------------
   -- MUX VIDEO
-  clk_video<=clksys;
-  ce_pixel<=mux(arca,ac_vga_ce,in_vga_ce) WHEN rising_edge(clksys);
+  clk_video<=clk;
+  ce_pixel<=mux(arca,ac_vga_ce,in_vga_ce) WHEN rising_edge(clk);
   
-  vga_de<=mux(arca,ac_vga_de  ,in_vga_de )  WHEN rising_edge(clksys);
-  vga_hs<=mux(arca,ac_vga_hsyn,in_vga_hsyn) WHEN rising_edge(clksys);
-  vga_vs<=mux(arca,ac_vga_vsyn,in_vga_vsyn) WHEN rising_edge(clksys);
+  vga_de<=mux(arca,ac_vga_de  ,in_vga_de )  WHEN rising_edge(clk);
+  vga_hs<=mux(arca,ac_vga_hsyn,in_vga_hsyn) WHEN rising_edge(clk);
+  vga_vs<=mux(arca,ac_vga_vsyn,in_vga_vsyn) WHEN rising_edge(clk);
   
-  vga_argb<=mux(arca,ac_vga_argb,in_vga_argb)  WHEN rising_edge(clksys);
+  vga_argb<=mux(arca,ac_vga_argb,in_vga_argb)  WHEN rising_edge(clk);
   vga_r_i<=(7=>vga_argb(2) AND vga_argb(3),OTHERS => vga_argb(2));
   vga_g_i<=(7=>vga_argb(1) AND vga_argb(3),OTHERS => vga_argb(1));
   vga_b_i<=(7=>vga_argb(0) AND vga_argb(3),OTHERS => vga_argb(0));
@@ -886,17 +583,14 @@ BEGIN
   vga_g<=std_logic_vector(vga_g_i);
   vga_b<=std_logic_vector(vga_b_i);
   
-  led_power<="00";
-  led_disk <="00";
-  
   ----------------------------------------------------------
   -- ROM / RAM
 
   wcart<=wr AND req AND ack; -- WHEN ad(12)='0' ELSE '0';
   
-  icart:PROCESS(clksys) IS
+  icart:PROCESS(clk) IS
   BEGIN
-    IF rising_edge(clksys) THEN
+    IF rising_edge(clk) THEN
       dr_rom<=cart(to_integer(ad_rom(13 DOWNTO 0))); -- 8kB
       
       IF wcart='1' THEN
@@ -906,9 +600,9 @@ BEGIN
     END IF;
   END PROCESS icart;
 
-  icart2:PROCESS(clksys) IS
+  icart2:PROCESS(clk) IS
   BEGIN
-    IF rising_edge(clksys) THEN
+    IF rising_edge(clk) THEN
       -- Download
       IF w_wr='1' THEN
         cart(to_integer(w_a)):=w_d;
@@ -916,9 +610,9 @@ BEGIN
     END IF;
   END PROCESS icart2;
   
-  PROCESS(clksys) IS
+  PROCESS(clk) IS
   BEGIN
-    IF rising_edge(clksys) THEN
+    IF rising_edge(clk) THEN
       w_wr<=ioctl_download AND ioctl_wr;
       w_d <=unsigned(ioctl_dout);
       w_a <=unsigned(ioctl_addr(12 DOWNTO 0));
@@ -929,11 +623,11 @@ BEGIN
   
   ----------------------------------------------------------
   -- CPU CLK
-  DivCLK:PROCESS (clksys,reset_na) IS
+  DivCLK:PROCESS (clk,reset_na) IS
   BEGIN
     IF reset_na='0' THEN
       tick_cpu<='0';
-    ELSIF rising_edge(clksys) THEN
+    ELSIF rising_edge(clk) THEN
       IF tick_cpu_cpt=CDIV - 1 THEN
         tick_cpu_cpt<=0;
         tick_cpu<='1';
@@ -944,7 +638,7 @@ BEGIN
     END IF;
   END PROCESS DivCLK;
   
-  reset_na<=NOT reset OR pll_locked OR NOT ioctl_download;
+  reset_na<=NOT reset OR NOT ioctl_download;
   creset<=ioctl_download;
   
 END struct;

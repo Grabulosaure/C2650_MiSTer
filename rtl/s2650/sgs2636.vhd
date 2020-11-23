@@ -198,7 +198,6 @@ ARCHITECTURE rtl OF sgs2636 IS
   SIGNAL o4_vcm,o4_vcbm : uv8 :=x"00";
   SIGNAL o1_hcm,o2_hcm,o3_hcm,o4_hcm : uint9;
   SIGNAL o1_vhit,o2_vhit,o3_vhit,o4_vhit : boolean;
-  SIGNAL o1_hit,o2_hit,o3_hit,o4_hit : std_logic;
   
   SIGNAL o12_cola,o13_cola,o23_cola,o14_cola,o34_cola,o24_cola : std_logic;
   SIGNAL o1b_cola,o2b_cola,o3b_cola,o4b_cola : std_logic;
@@ -206,8 +205,8 @@ ARCHITECTURE rtl OF sgs2636 IS
   SIGNAL o1_cplt,o2_cplt,o3_cplt,o4_cplt : std_logic;
   
   SIGNAL o1_diff,o2_diff,o3_diff,o4_diff : uint9 :=0;
-  SIGNAL hpos,htotal,hsyncstart,hsyncend,hdispstart,hdispend : uint9;
-  SIGNAL vpos,vtotal,vsyncstart,vsyncend,vdisp : uint9;
+  SIGNAL hpos,htotal,hsyncstart,hsyncend,hdispstart : uint9;
+  SIGNAL vpos,vtotal,vsyncstart,vsyncend : uint9;
   SIGNAL vbar   : uint5; -- Vertical bar number 0 .. 19
   SIGNAL vpos20 : uint5; -- Line number within bar 0..19
   
@@ -989,21 +988,14 @@ BEGIN
             NULL;
         END CASE;
         
-        o1_hit<=o1_hit_v;
-        o2_hit<=o2_hit_v;
-        o3_hit<=o3_hit_v;
-        o4_hit<=o4_hit_v;
-        
       END IF;
       
       --------------------------------------------
       hdispstart<=55;
-      hdispend  <=227;
       hsyncstart<=11;
       hsyncend  <=28;
       htotal    <=227;
       
-      vdisp     <=268;
       vsyncstart<=301;
       vsyncend  <=303;
       vtotal    <=312;
